@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Energy Meter Monitor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+    <!-- Background -->
+    <div class="background">
+        <div class="grid-pattern"></div>
+        <div class="glow-orb glow-orb-1"></div>
+        <div class="glow-orb glow-orb-2"></div>
+    </div>
+
+    <!-- ===== HEADER ===== -->
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <div class="logo-icon-wrap">
+                    <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                    </svg>
+                </div>
+                <div class="logo-text">
+                    <h1>Smart Energy</h1>
+                    <span>Real-time Monitor</span>
+                </div>
+            </div>
+
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <div class="status-text">
+                    <p class="status-label">Status</p>
+                    <p class="status-value" id="statusText">CONNECTING</p>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- ===== NAV TABS ===== -->
+    <nav class="nav-tabs">
+        <div class="container">
+            <button class="tab-btn active" onclick="switchTab('realtime')" id="realtimeTab">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                </svg>
+                Summary
+            </button>
+            <button class="tab-btn" onclick="switchTab('history')" id="historyTab">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                    <path d="M3 5v6c0 1.7 4 3 9 3s9-1.3 9-3V5"></path>
+                    <path d="M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6"></path>
+                </svg>
+                Database
+            </button>
+            <button class="tab-btn" onclick="switchTab('settings')" id="settingsTab">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0A1.7 1.7 0 0 0 10.1 3V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h0a1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path>
+                </svg>
+                Settings
+            </button>
+        </div>
+    </nav>
+
+    <!-- ===== MAIN ===== -->
+    <main class="main-content">
+        <div class="container">
+
+            <!-- ── SUMMARY TAB ── -->
+            <div id="realtimeContent" class="tab-content active">
+
+                <div class="summary-topbar">
+                    <div class="summary-topbar-left">
+                        <h2>Real-time Monitoring</h2>
+                        <p>Live data stream from PZEM-004T sensor</p>
+                    </div>
+                    <div class="last-update" id="lastUpdate">Waiting for data…</div>
+                </div>
+
+                <div class="dashboard-grid">
+
+                    <!-- Metric Cards -->
+                    <div class="metrics-column">
+
+                        <div class="metric-card-compact" data-color="yellow">
+                            <div class="metric-header-compact">
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                                <p class="metric-label-compact">Voltage</p>
+                            </div>
+                            <div class="metric-value-compact">
+                                <span id="voltage">---</span>
+                                <span class="metric-unit-compact">V</span>
+                            </div>
+                        </div>
+
+                        <div class="metric-card-compact" data-color="blue">
+                            <div class="metric-header-compact">
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                                <p class="metric-label-compact">Current</p>
+                            </div>
+                            <div class="metric-value-compact">
+                                <span id="current">---</span>
+                                <span class="metric-unit-compact">A</span>
+                            </div>
+                        </div>
+
+                        <div class="metric-card-compact" data-color="green">
+                            <div class="metric-header-compact">
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+                                <p class="metric-label-compact">Power</p>
+                            </div>
+                            <div class="metric-value-compact">
+                                <span id="power">---</span>
+                                <span class="metric-unit-compact">W</span>
+                            </div>
+                        </div>
+
+                        <div class="metric-card-compact" data-color="purple">
+                            <div class="metric-header-compact">
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                <p class="metric-label-compact">Frequency</p>
+                            </div>
+                            <div class="metric-value-compact">
+                                <span id="frequency">---</span>
+                                <span class="metric-unit-compact">Hz</span>
+                            </div>
+                        </div>
+
+                        <div class="metric-card-compact" data-color="yellow">
+                            <div class="metric-header-compact">
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                                <p class="metric-label-compact">Apparent</p>
+                            </div>
+                            <div class="metric-value-compact">
+                                <span id="apparent">---</span>
+                                <span class="metric-unit-compact">kVA</span>
+                            </div>
+                        </div>
+
+                        <div class="metric-card-compact" data-color="blue">
+                            <div class="metric-header-compact">
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                                <p class="metric-label-compact">Reactive</p>
+                            </div>
+                            <div class="metric-value-compact">
+                                <span id="reactive">---</span>
+                                <span class="metric-unit-compact">kVAR</span>
+                            </div>
+                        </div>
+
+                        <div class="metric-card-compact" data-color="green">
+                            <div class="metric-header-compact">
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>
+                                <p class="metric-label-compact">Energy</p>
+                            </div>
+                            <div class="metric-value-compact">
+                                <span id="energy">---</span>
+                                <span class="metric-unit-compact">kWh</span>
+                            </div>
+                        </div>
+
+                        <div class="metric-card-compact" data-color="purple">
+                            <div class="metric-header-compact">
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+                                <p class="metric-label-compact">Power Factor</p>
+                            </div>
+                            <div class="metric-value-compact">
+                                <span id="powerFactor">---</span>
+                            </div>
+                        </div>
+
+                    </div><!-- /metrics-column -->
+
+                    <!-- Chart -->
+                    <div class="chart-column">
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <h3>Graph</h3>
+                                <div class="chart-header-right">
+                                    <!-- Time filter -->
+                                    <div class="time-filter-row">
+                                        <div class="time-filter-group">
+                                            <button class="time-filter-btn active" data-filter="all"    onclick="setTimeFilter('all')">All</button>
+                                            <button class="time-filter-btn"        data-filter="day"    onclick="setTimeFilter('day')">Day</button>
+                                            <button class="time-filter-btn"        data-filter="hour"   onclick="setTimeFilter('hour')">Hour</button>
+                                            <button class="time-filter-btn"        data-filter="minute" onclick="setTimeFilter('minute')">Min</button>
+                                        </div>
+                                        <span class="filter-info" id="filterInfo">0 data points</span>
+                                    </div>
+                                    <!-- Controls row -->
+                                    <div class="chart-controls">
+                                        <div class="zoom-controls">
+                                            <span class="zoom-hint">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+                                                Scroll to zoom
+                                            </span>
+                                            <button class="chart-btn chart-btn-outline" onclick="resetZoom()">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+                                                Reset
+                                            </button>
+                                        </div>
+                                        <select id="parameterSelect" class="parameter-select">
+                                            <option value="voltage">Voltage (V)</option>
+                                            <option value="current">Current (A)</option>
+                                            <option value="power">Power (W)</option>
+                                            <option value="frequency">Frequency (Hz)</option>
+                                            <option value="apparent">Apparent (kVA)</option>
+                                            <option value="reactive">Reactive (kVAR)</option>
+                                            <option value="energy">Energy (kWh)</option>
+                                            <option value="powerFactor">Power Factor</option>
+                                        </select>
+                                        <button class="chart-btn" onclick="clearChartData()">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6m4-6v6"></path></svg>
+                                            Clear
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="realtimeChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                </div><!-- /dashboard-grid -->
+            </div><!-- /realtimeContent -->
+
+            <!-- ── DATABASE TAB ── -->
+            <div id="historyContent" class="tab-content">
+                <div class="section-header">
+                    <div>
+                        <h2>History Data</h2>
+                        <p id="historyCount">Loading…</p>
+                    </div>
+                    <button class="btn-export" onclick="exportSpreadsheet()">
+                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        Export Spreadsheet
+                    </button>
+                </div>
+
+                <div class="table-container">
+                    <div class="table-scroll">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Voltage (V)</th>
+                                    <th>Current (A)</th>
+                                    <th>Power (W)</th>
+                                    <th>Energy (kWh)</th>
+                                    <th>PF</th>
+                                </tr>
+                            </thead>
+                            <tbody id="historyTableBody">
+                                <tr><td colspan="6" class="loading-cell">Loading history data…</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── SETTINGS TAB ── -->
+            <div id="settingsContent" class="tab-content">
+                <div class="section-header">
+                    <div>
+                        <h2>System Settings</h2>
+                        <p>Configure monitoring parameters and alerts</p>
+                    </div>
+                </div>
+
+                <div class="control-panel">
+
+                    <!-- Clear Records -->
+                    <div class="control-card">
+                        <div class="control-header">
+                            <div class="control-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6m4-6v6"></path></svg>
+                            </div>
+                            <div class="control-header-text">
+                                <h4>Clear Records</h4>
+                                <p>Hapus semua data history dari database</p>
+                            </div>
+                        </div>
+                        <button class="control-btn btn-reset" onclick="clearRecords()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6m4-6v6"></path></svg>
+                            Clear Records
+                        </button>
+                    </div>
+
+                    <!-- Data Capture -->
+                    <div class="control-card">
+                        <div class="control-header">
+                            <div class="control-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>
+                            </div>
+                            <div class="control-header-text">
+                                <h4>Data Capture</h4>
+                                <p id="captureStatus">Status: Inactive</p>
+                            </div>
+                        </div>
+                        <button class="control-btn btn-capture" id="captureBtn" onclick="toggleCapture()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>
+                            Start Capture
+                        </button>
+                    </div>
+
+                    <!-- Capture Interval -->
+                    <div class="control-card">
+                        <div class="control-header">
+                            <div class="control-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                            </div>
+                            <div class="control-header-text">
+                                <h4>Capture Interval</h4>
+                                <p id="intervalDisplay">Current: 3 seconds</p>
+                            </div>
+                        </div>
+                        <div class="interval-controls">
+                            <input type="number" id="intervalInput" class="interval-input" value="3" min="1" max="3600">
+                            <select id="intervalUnit" class="interval-select">
+                                <option value="1">Seconds</option>
+                                <option value="60">Minutes</option>
+                                <option value="3600">Hours</option>
+                            </select>
+                            <button class="control-btn btn-set" onclick="setCaptureInterval()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                Set
+                            </button>
+                        </div>
+                    </div>
+
+                </div>
+            </div><!-- /settingsContent -->
+
+        </div>
+    </main>
+
+    <!-- Modal -->
+    <div id="customModal" class="modal-overlay">
+        <div class="modal-container">
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+            <div class="modal-content">
+                <div class="modal-icon" id="modalIcon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                </div>
+                <h3 class="modal-title" id="modalTitle">Notification</h3>
+                <p class="modal-message" id="modalMessage"></p>
+                <div class="modal-buttons" id="modalButtons">
+                    <button class="modal-btn modal-btn-primary" onclick="closeModal()">OK</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+    <script>const firebaseConfig = {{ firebase_config | tojson }};</script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
