@@ -9,6 +9,11 @@ let isConnected = false;
 let lastDataTimestamp = 0;
 let connectionCheckInterval = null;
 
+// Fingerprint data terakhir yang diterima saat reload (cached/stale).
+// Device dianggap ONLINE hanya jika Firebase mengirim data dengan nilai BERBEDA
+// dari snapshot awal — bukan hanya karena listener fire (bisa 2x meski device mati).
+let _staleFingerprint = null;
+
 // Chart state
 let realtimeChart = null;
 let chartData = {
@@ -23,7 +28,10 @@ let chartData = {
     energy: [],
     powerFactor: []
 };
-const MAX_DATA_POINTS = 1000;
+
+const MAX_DATA_POINTS     = 300;   // titik in-memory untuk tampilan & localStorage
+const SAVE_EVERY_N_POINTS = 60;    // auto-save localStorage setiap 60 titik baru
+
 let selectedParameter = 'voltage';
 
 // Time filter state: 'all' | 'day' | 'hour' | 'minute'
@@ -56,31 +64,113 @@ let autoExportEnabled = false;
 let autoExportInterval = '0';
 
 // ====================================
+// CHART PERSISTENCE — localStorage
+// Data chart disimpan di browser, bukan Firebase.
+// Tidak makan kuota Firebase, persist saat reload,
+// bekerja di semua deployment (Render, Vercel, dll).
+// ====================================
+const CHART_STORAGE_KEY = 'sem_chartdata_v1'; // ganti suffix jika ingin reset semua user
+const CHART_KEYS = ['labels','timestamps','voltage','current','power',
+                    'frequency','apparent','reactive','energy','powerFactor'];
+let _saveCounter   = 0;
+// True saat user sedang zoom/pan manual — chart tidak auto-follow ke titik terbaru
+let _userIsZoomed  = false;
+
+/**
+ * Muat chartData dari localStorage.
+ * Sinkron, dipanggil sebelum initChart().
+ */
+function loadChartDataFromStorage() {
+    try {
+        const raw = localStorage.getItem(CHART_STORAGE_KEY);
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        const valid = CHART_KEYS.every(k => Array.isArray(saved[k]));
+        if (!valid) return;
+        CHART_KEYS.forEach(k => { chartData[k] = saved[k]; });
+
+        // Pruning: buang data yang lebih tua dari 24 jam agar grafik
+        // tidak campur data hari ini dengan data kemarin/lama.
+        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+        const firstRecent = chartData.timestamps.findIndex(t => t >= cutoff);
+        if (firstRecent > 0) {
+            CHART_KEYS.forEach(k => { chartData[k] = chartData[k].slice(firstRecent); });
+            console.log(`[ChartStorage] Pruned ${firstRecent} stale points (> 24 jam).`);
+        } else if (firstRecent === -1) {
+            // Semua data sudah kadaluarsa — reset total
+            CHART_KEYS.forEach(k => { chartData[k] = []; });
+            console.log('[ChartStorage] Semua data kadaluarsa, chart di-reset.');
+            return;
+        }
+
+        console.log(`[ChartStorage] Loaded ${chartData.labels.length} points from localStorage.`);
+    } catch (e) {
+        console.warn('[ChartStorage] Gagal memuat:', e);
+    }
+}
+
+/**
+ * Simpan chartData ke localStorage (sinkron, ringan).
+ */
+function saveChartDataToStorage() {
+    try {
+        const payload = {};
+        CHART_KEYS.forEach(k => { payload[k] = chartData[k]; });
+        localStorage.setItem(CHART_STORAGE_KEY, JSON.stringify(payload));
+    } catch (e) {
+        // localStorage penuh (5 MB limit) — pangkas data lama lalu coba lagi
+        console.warn('[ChartStorage] Storage penuh, memangkas data lama...');
+        CHART_KEYS.forEach(k => { chartData[k] = chartData[k].slice(-100); });
+        try {
+            const payload = {};
+            CHART_KEYS.forEach(k => { payload[k] = chartData[k]; });
+            localStorage.setItem(CHART_STORAGE_KEY, JSON.stringify(payload));
+        } catch (_) { /* biarkan jika tetap gagal */ }
+    }
+}
+
+/**
+ * Dipanggil setiap titik baru masuk.
+ * Auto-save setiap SAVE_EVERY_N_POINTS; save final saat tab ditutup/reload.
+ */
+function maybeSaveChartData() {
+    _saveCounter++;
+    if (_saveCounter >= SAVE_EVERY_N_POINTS) {
+        _saveCounter = 0;
+        saveChartDataToStorage();
+    }
+}
+
+/**
+ * Hapus chart dari localStorage.
+ */
+function clearChartDataFromStorage() {
+    _saveCounter = 0;
+    localStorage.removeItem(CHART_STORAGE_KEY);
+}
+
+// ====================================
 // CUSTOM MODAL FUNCTIONS
 // ====================================
 function showModal(title, message, type = 'info', buttons = ['ok']) {
     return new Promise((resolve) => {
-        const modal = document.getElementById('customModal');
-        const modalTitle = document.getElementById('modalTitle');
+        const modal        = document.getElementById('customModal');
+        const modalTitle   = document.getElementById('modalTitle');
         const modalMessage = document.getElementById('modalMessage');
-        const modalIcon = document.getElementById('modalIcon');
+        const modalIcon    = document.getElementById('modalIcon');
         const modalButtons = document.getElementById('modalButtons');
 
-        modalTitle.textContent = title;
+        modalTitle.textContent   = title;
         modalMessage.textContent = message;
-        modalIcon.className = 'modal-icon ' + type;
+        modalIcon.className      = 'modal-icon ' + type;
 
-        let iconSVG = '';
-        if (type === 'success') {
-            iconSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>';
-        } else if (type === 'warning') {
-            iconSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
-        } else if (type === 'error') {
-            iconSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>';
-        } else {
-            iconSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>';
-        }
-        modalIcon.innerHTML = iconSVG;
+        const icons = {
+            success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+            warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
+            error:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
+            info:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>'
+        };
+        modalIcon.innerHTML = icons[type] || icons.info;
 
         modalButtons.innerHTML = '';
         if (buttons.includes('confirm')) {
@@ -109,32 +199,31 @@ function showModal(title, message, type = 'info', buttons = ['ok']) {
 }
 
 function closeModal() {
-    const modal = document.getElementById('customModal');
-    modal.classList.remove('active');
+    document.getElementById('customModal').classList.remove('active');
     document.body.style.overflow = '';
 }
 
-document.addEventListener('click', (e) => {
-    const modal = document.getElementById('customModal');
-    if (e.target === modal) closeModal();
+document.addEventListener('click', e => {
+    if (e.target === document.getElementById('customModal')) closeModal();
 });
-
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeModal();
-});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
 // ====================================
 // ZOOM RESET
 // ====================================
 function resetZoom() {
-    if (realtimeChart) realtimeChart.resetZoom();
+    if (realtimeChart) {
+        realtimeChart.resetZoom();
+        _userIsZoomed = false; // user kembali ke view normal → aktifkan auto-follow
+    }
 }
 
 // ====================================
 // TIME FILTER
 // ====================================
 function setTimeFilter(filter) {
-    timeFilter = filter;
+    timeFilter    = filter;
+    _userIsZoomed = false; // reset zoom state saat filter berubah
     document.querySelectorAll('.time-filter-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === filter);
     });
@@ -146,69 +235,36 @@ function setTimeFilter(filter) {
 // ====================================
 function getFilterConfig() {
     const configs = {
-        minute: {
-            buckets: 60,
-            bucketMs: 60_000,           // 1 menit per bucket
-            windowMs: 60 * 60_000,      // 60 menit total
-            fmt: 'HH:MM'
-        },
-        hour: {
-            buckets: 24,
-            bucketMs: 60 * 60_000,      // 1 jam per bucket
-            windowMs: 24 * 60 * 60_000, // 24 jam total
-            fmt: 'HH:00'
-        },
-        day: {
-            buckets: 7,
-            bucketMs: 24 * 60 * 60_000, // 1 hari per bucket
-            windowMs: 7 * 24 * 60 * 60_000, // 7 hari total
-            fmt: 'DD/MM'
-        }
+        minute: { buckets: 60, bucketMs: 60_000,            windowMs: 60 * 60_000,           fmt: 'HH:MM'  },
+        hour:   { buckets: 24, bucketMs: 60 * 60_000,       windowMs: 24 * 60 * 60_000,      fmt: 'HH:00'  },
+        day:    { buckets: 7,  bucketMs: 24 * 60 * 60_000,  windowMs: 7 * 24 * 60 * 60_000,  fmt: 'DD/MM'  }
     };
     return configs[timeFilter] || null;
 }
 
 function getAggregatedChartData() {
-    const param = selectedParameter;
-    const raw   = chartData[param];
-    const ts    = chartData.timestamps;
+    const raw = chartData[selectedParameter];
+    const ts  = chartData.timestamps;
 
-    if (timeFilter === 'all') {
-        return { labels: chartData.labels, values: raw };
-    }
+    if (timeFilter === 'all') return { labels: chartData.labels, values: raw };
 
     const cfg = getFilterConfig();
     if (!cfg) return { labels: chartData.labels, values: raw };
 
-    // SESUDAH (kode baru):
     const now = Date.now();
-
-    // Sejajarkan windowStart ke boundary jam clock yang sebenarnya,
-    // agar bucket i = menit/jam/hari clock yang nyata — bukan "mengambang".
     let alignedNow;
-    {
-        const d = new Date(now);
-        if (timeFilter === 'minute') {
-            // Batas atas = awal menit BERIKUTNYA → label "13:01" = data 13:00:00–13:00:59
-            alignedNow = new Date(d.getFullYear(), d.getMonth(), d.getDate(),
-                                d.getHours(), d.getMinutes() + 1, 0, 0).getTime();
-        } else if (timeFilter === 'hour') {
-            // Batas atas = awal jam berikutnya
-            alignedNow = new Date(d.getFullYear(), d.getMonth(), d.getDate(),
-                                d.getHours() + 1, 0, 0, 0).getTime();
-        } else { // day
-            // Batas atas = tengah malam hari berikutnya
-            alignedNow = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1,
-                                0, 0, 0, 0).getTime();
-        }
+    const d = new Date(now);
+    if (timeFilter === 'minute') {
+        alignedNow = new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes() + 1, 0, 0).getTime();
+    } else if (timeFilter === 'hour') {
+        alignedNow = new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours() + 1, 0, 0, 0).getTime();
+    } else {
+        alignedNow = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 0, 0, 0, 0).getTime();
     }
     const windowStart = alignedNow - cfg.windowMs;
 
-    // Hitung rata-rata per bucket
     const sums   = new Array(cfg.buckets).fill(0);
     const counts = new Array(cfg.buckets).fill(0);
-    const mins   = new Array(cfg.buckets).fill(Infinity);
-    const maxs   = new Array(cfg.buckets).fill(-Infinity);
 
     for (let i = 0; i < ts.length; i++) {
         const t = ts[i];
@@ -217,28 +273,16 @@ function getAggregatedChartData() {
         if (idx < 0 || idx >= cfg.buckets) continue;
         sums[idx]   += raw[i];
         counts[idx] += 1;
-        if (raw[i] < mins[idx]) mins[idx] = raw[i];
-        if (raw[i] > maxs[idx]) maxs[idx] = raw[i];
     }
 
-    const labels = [];
-    const values = [];
-
+    const labels = [], values = [];
     for (let i = 0; i < cfg.buckets; i++) {
-        // Label = AKHIR bucket (end-of-bucket), bukan awal.
-        // Contoh: data 13:00:00–13:00:59 → label "13:01"
-        // Khusus 'day': tampilkan hari bucket itu sendiri (awal bucket)
-        const labelTime = timeFilter === 'day'
-            ? new Date(windowStart + i * cfg.bucketMs)
-            : new Date(windowStart + (i + 1) * cfg.bucketMs);
+        // Selalu gunakan AWAL bucket sebagai label (konsisten semua filter).
+        // Bug lama: Hour/Min pakai (i+1)*bucketMs → label satu periode ke depan.
+        // Contoh: data jam 14:xx → seharusnya label '14:00', bukan '15:00'.
+        const labelTime = new Date(windowStart + i * cfg.bucketMs);
         labels.push(formatBucketLabel(labelTime, cfg.fmt));
-
-        if (counts[i] > 0) {
-            values.push(parseFloat((sums[i] / counts[i]).toFixed(4)));
-        } else {
-            // Bucket kosong — null agar spanGaps bisa menghubungkan
-            values.push(null);
-        }
+        values.push(counts[i] > 0 ? parseFloat((sums[i] / counts[i]).toFixed(4)) : null);
     }
 
     return { labels, values };
@@ -250,37 +294,71 @@ function formatBucketLabel(d, fmt) {
         case 'DD/MM':    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
         case 'HH:00':   return `${pad(d.getHours())}:00`;
         case 'HH:MM':   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        case 'HH:MM:SS':return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
         default:         return d.toLocaleTimeString('id-ID');
     }
 }
 
 function refreshChartWithFilter() {
-    if (realtimeChart) { realtimeChart.destroy(); realtimeChart = null; }
-    initChart();
+    const canvas = document.getElementById('realtimeChart');
+    if (!canvas) return;
+    const wrap = canvas.parentElement;
+
+    // Fade out
+    wrap.style.transition = 'opacity 0.18s ease';
+    wrap.style.opacity    = '0';
+
+    setTimeout(() => {
+        if (realtimeChart) { realtimeChart.destroy(); realtimeChart = null; }
+        initChart();
+        // Fade in
+        wrap.style.opacity = '1';
+    }, 180);
 }
 
-function updateFilterInfo(values) {
+function updateFilterInfo(_values) {
     const el = document.getElementById('filterInfo');
-    if (!el) return;
-
-    if (timeFilter === 'all') {
-        el.textContent = `${chartData.labels.length} titik data (raw)`;
-        return;
-    }
-
-    const nonNull = (values || []).filter(v => v !== null).length;
-    const desc = {
-        minute: '60 bucket · avg/menit',
-        hour:   '24 bucket · avg/jam',
-        day:    '7 bucket  · avg/hari'
-    }[timeFilter] || '';
-    el.textContent = `${nonNull} bucket aktif · ${desc}`;
+    if (el) el.textContent = '';
 }
 
 // ====================================
 // CHART FUNCTIONS
 // ====================================
+/**
+ * Hitung min/max y-axis dengan padding tetap per parameter.
+ * Tujuan: nilai seperti 226–228 V tetap terlihat jarak perubahannya,
+ * bukan gepeng di tengah chart.
+ */
+function getYBounds(values, param) {
+    // Padding minimum per parameter (satu sisi)
+    const padMap = {
+        voltage:     10,    // ±10 V  → range minimal 20 V
+        current:     1,     // ±1 A
+        power:       50,    // ±50 W
+        frequency:   1,     // ±1 Hz
+        apparent:    0.05,  // ±0.05 kVA
+        reactive:    0.05,  // ±0.05 kVAR
+        energy:      0.1,   // ±0.1 kWh
+        powerFactor: 0.05   // ±0.05
+    };
+    const pad = padMap[param] ?? 5;
+
+    const clean = (values || []).filter(v => v !== null && v !== undefined && isFinite(v));
+    if (clean.length === 0) return { yMin: undefined, yMax: undefined };
+
+    const dataMin = Math.min(...clean);
+    const dataMax = Math.max(...clean);
+    const dataRange = dataMax - dataMin;
+
+    // Jika range data lebih kecil dari 2× padding, gunakan padding tetap
+    // Jika lebih besar, tambahkan 15% dari range agar tetap ada napas
+    const actualPad = dataRange < pad * 2 ? pad : dataRange * 0.15;
+
+    return {
+        yMin: parseFloat((dataMin - actualPad).toFixed(4)),
+        yMax: parseFloat((dataMax + actualPad).toFixed(4))
+    };
+}
+
 function initChart() {
     const ctx = document.getElementById('realtimeChart');
     if (!ctx) return;
@@ -296,27 +374,28 @@ function initChart() {
         powerFactor: { label: 'Power Factor',   unit: '',     color: '#6B46C1', borderColor: '#5A3AA0' }
     };
 
-    const info = parameterInfo[selectedParameter];
-
-    // Semua view pakai line, hanya day pakai bar
-    const isBar  = (timeFilter === 'day');
-    const isAgg  = (timeFilter !== 'all');
+    const info      = parameterInfo[selectedParameter];
+    const isBar     = (timeFilter === 'day' || timeFilter === 'hour');
+    const isAgg     = (timeFilter !== 'all');
+    const isMinute  = (timeFilter === 'minute');
 
     const { labels, values } = getAggregatedChartData();
 
     const xTitles = {
         all:    'Waktu',
-        minute: 'Menit (60 menit terakhir)',
-        hour:   'Jam (24 jam terakhir)',
-        day:    'Hari (7 hari terakhir)'
+        minute: '60 Menit Terakhir',
+        hour:   '24 Jam Terakhir',
+        day:    '7 Hari Terakhir'
     };
 
-    // Gradient fill — dibuat setelah chart dibuat untuk akses ctx
     const gradientFill = (() => {
-        const c2d = ctx.getContext('2d');
-        const g   = c2d.createLinearGradient(0, 0, 0, ctx.clientHeight || 300);
-        g.addColorStop(0, info.color + '55');
-        g.addColorStop(1, info.color + '05');
+        const c2d  = ctx.getContext('2d');
+        const g    = c2d.createLinearGradient(0, 0, 0, ctx.clientHeight || 300);
+        // Minute view: fill lebih tebal agar area tren mudah dibaca
+        const top  = isMinute ? '88' : '55';
+        const bot  = isMinute ? '10' : '05';
+        g.addColorStop(0, info.color + top);
+        g.addColorStop(1, info.color + bot);
         return g;
     })();
 
@@ -325,82 +404,47 @@ function initChart() {
         data: {
             labels,
             datasets: [{
-                label: info.unit ? `${info.label} (${info.unit})` : info.label,
-                data: values,
-
-                // Line style
-                borderColor:              info.borderColor,
-                backgroundColor:          isBar ? info.color + 'BB' : gradientFill,
-                borderWidth:              isBar ? 1.5 : 2,
-
-                // Smooth curve — monotone agar tidak overshoot
-                tension:                  0.4,
-                cubicInterpolationMode:   'monotone',
-                fill:                     !isBar,
-
-                // Point styling
-                pointRadius:              isBar ? 0 : (isAgg ? 4 : (chartData.labels.length > 200 ? 0 : 2)),
-                pointHoverRadius:         isBar ? 0 : 6,
-                pointBackgroundColor:     info.borderColor,
-                pointBorderColor:         '#fff',
-                pointBorderWidth:         1.5,
-
-                // Bar style
-                borderRadius:             isBar ? 5 : 0,
-                borderSkipped:            false,
-
-                // Smooth step animation
-                stepped:                  false
+                label:                   info.unit ? `${info.label} (${info.unit})` : info.label,
+                data:                    values,
+                borderColor:             info.borderColor,
+                backgroundColor:         isBar ? info.color + 'BB' : gradientFill,
+                borderWidth:             isBar ? 1.5 : (isMinute ? 2.5 : 2),
+                tension:                 isMinute ? 0.5 : 0.4,
+                cubicInterpolationMode:  'monotone',
+                spanGaps:                isMinute, // sambung garis melewati bucket kosong
+                fill:                    !isBar,
+                pointRadius:             isBar ? 0 : (isMinute ? 0 : (isAgg ? 4 : (chartData.labels.length > 150 ? 0 : 2))),
+                pointHoverRadius:        isBar ? 0 : (isMinute ? 5 : 6),
+                pointBackgroundColor:    info.borderColor,
+                pointBorderColor:        '#fff',
+                pointBorderWidth:        1.5,
+                borderRadius:            isBar ? 5 : 0,
+                borderSkipped:           false
             }]
         },
         options: {
             responsive:          true,
             maintainAspectRatio: false,
             interaction:         { intersect: false, mode: 'index' },
-
-            // Animasi lebih smooth
-            animation: {
-                duration: 400,
-                easing:   'easeInOutQuart'
-            },
-            transitions: {
-                active: {
-                    animation: { duration: 200 }
-                }
-            },
-
+            animation:           { duration: 300, easing: 'easeInOutQuart' },
+            transitions:         { active: { animation: { duration: 150 } } },
             plugins: {
                 legend: {
-                    display:  true,
-                    position: 'top',
+                    display:  true, position: 'top',
                     labels: {
-                        font:           { family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Arial', size: 11, weight: 700 },
-                        color:          '#666666',
-                        usePointStyle:  true,
-                        pointStyle:     isBar ? 'rect' : 'circle',
-                        padding:        12
+                        font:          { family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Arial', size: 11, weight: 700 },
+                        color:         '#666666', usePointStyle: true,
+                        pointStyle:    isBar ? 'rect' : 'circle', padding: 12
                     }
                 },
                 tooltip: {
-                    backgroundColor:  'rgba(20,20,20,0.9)',
-                    titleFont:        { size: 12, weight: 700 },
-                    bodyFont:         { size: 11 },
-                    padding:          12,
-                    cornerRadius:     10,
-                    displayColors:    false,
-                    caretSize:        6,
+                    backgroundColor: 'rgba(20,20,20,0.9)',
+                    titleFont:       { size: 12, weight: 700 },
+                    bodyFont:        { size: 11 },
+                    padding: 12, cornerRadius: 10, displayColors: false, caretSize: 6,
                     callbacks: {
-                        title: function(items) {
-                            const label = items[0]?.label || '';
-                            const prefix = {
-                                minute: ' ',
-                                hour:   ' ',
-                                day:    ' ',
-                                all:    ' '
-                            }[timeFilter] || '';
-                            return prefix + label;
-                        },
-                        label: function(ctx) {
+                        title: items => ({ minute: ' ', hour: ' ', day: ' ', all: ' ' }[timeFilter] || ' ') + (items[0]?.label || ''),
+                        label: ctx => {
                             const val = ctx.parsed.y;
                             if (val === null || val === undefined) return '  Tidak ada data';
                             const unit   = info.unit ? ` ${info.unit}` : '';
@@ -410,62 +454,42 @@ function initChart() {
                     }
                 },
                 zoom: {
-                    zoom: { wheel: { enabled: true, speed: 0.08 }, pinch: { enabled: true }, mode: 'x' },
-                    pan:  { enabled: true, mode: 'x' },
+                    zoom: {
+                        wheel:   { enabled: true, speed: 0.08 },
+                        pinch:   { enabled: true },
+                        mode:    'x',
+                        onZoom:  () => { _userIsZoomed = true; }
+                    },
+                    pan: {
+                        enabled: true,
+                        mode:    'x',
+                        onPan:   () => { _userIsZoomed = true; }
+                    },
                     limits: { x: { minRange: 2 } }
                 }
             },
-
             scales: {
                 x: {
                     display: true,
-                    title: {
-                        display: true,
-                        text:    xTitles[timeFilter] || 'Waktu',
-                        font:    { size: 11, weight: 700 },
-                        color:   '#666666'
-                    },
-                    grid: {
-                        color:     'rgba(0,0,0,0.04)',
-                        drawTicks: false
-                    },
-                    ticks: {
-                        maxRotation:   45,
-                        minRotation:   0,
-                        font:          { size: 9 },
-                        color:         '#999999',
-                        maxTicksLimit: isBar ? 7 : (isAgg ? 12 : 15),
-                        padding:       4
-                    },
-                    // Sedikit padding kiri-kanan agar garis tidak mentok tepi
+                    title: { display: true, text: xTitles[timeFilter] || 'Waktu', font: { size: 11, weight: 700 }, color: '#666666' },
+                    grid:   { color: 'rgba(0,0,0,0.04)', drawTicks: false },
+                    ticks:  { maxRotation: isMinute ? 0 : 45, minRotation: 0, font: { size: 9 }, color: '#999999', maxTicksLimit: isBar ? 7 : (isMinute ? 10 : (isAgg ? 12 : 15)), padding: 4 },
                     offset: isBar
                 },
-                y: {
-                    display: true,
-                    title: {
+                y: (() => {
+                    const { yMin, yMax } = getYBounds(values, selectedParameter);
+                    return {
                         display: true,
-                        text:    info.unit ? `${info.label} (${info.unit})` : info.label,
-                        font:    { size: 11, weight: 700 },
-                        color:   '#666666'
-                    },
-                    grid: {
-                        color:     'rgba(0,0,0,0.05)',
-                        drawTicks: false
-                    },
-                    ticks: {
-                        font:    { size: 9 },
-                        color:   '#999999',
-                        padding: 6,
-                        // Format angka dengan presisi yang bagus
-                        callback: function(val) {
-                            if (val === null) return '';
-                            return val >= 1000 ? (val/1000).toFixed(1)+'k' : val;
-                        }
-                    },
-                    beginAtZero: selectedParameter !== 'powerFactor' && selectedParameter !== 'voltage' && selectedParameter !== 'frequency',
-                    // Tambah sedikit padding atas agar puncak garis tidak terpotong
-                    grace: '5%'
-                }
+                        title: { display: true, text: info.unit ? `${info.label} (${info.unit})` : info.label, font: { size: 11, weight: 700 }, color: '#666666' },
+                        grid:   { color: 'rgba(0,0,0,0.05)', drawTicks: false },
+                        ticks:  {
+                            font: { size: 9 }, color: '#999999', padding: 6,
+                            callback: val => (val === null ? '' : val >= 1000 ? (val / 1000).toFixed(1) + 'k' : val)
+                        },
+                        min: yMin,
+                        max: yMax
+                    };
+                })()
             }
         }
     });
@@ -473,23 +497,29 @@ function initChart() {
     updateFilterInfo(values);
 }
 
+/**
+ * Tambah titik baru ke chartData dan update chart secara realtime.
+ * Firebase TIDAK dipanggil di sini kecuali threshold terpenuhi.
+ */
 function updateChart(data) {
     if (!realtimeChart) return;
 
-    const now = new Date();
+    const now       = new Date();
     const timeLabel = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
+    // Tambah titik baru ke array in-memory
     chartData.labels.push(timeLabel);
     chartData.timestamps.push(Date.now());
-    chartData.voltage.push(data.Voltage || 0);
-    chartData.current.push(data.Current || 0);
-    chartData.power.push(data.Power || 0);
+    chartData.voltage.push(data.Voltage     || 0);
+    chartData.current.push(data.Current     || 0);
+    chartData.power.push(data.Power         || 0);
     chartData.frequency.push(data.Frequency || 0);
-    chartData.apparent.push(data.Apparent || 0);
-    chartData.reactive.push(data.Reactive || 0);
-    chartData.energy.push(data.Energy || 0);
+    chartData.apparent.push(data.Apparent   || 0);
+    chartData.reactive.push(data.Reactive   || 0);
+    chartData.energy.push(data.Energy       || 0);
     chartData.powerFactor.push(data.PowerFactor || 0);
 
+    // Buang titik paling lama jika melebihi batas in-memory
     if (chartData.labels.length > MAX_DATA_POINTS) {
         chartData.labels.shift();
         chartData.timestamps.shift();
@@ -503,23 +533,81 @@ function updateChart(data) {
         chartData.powerFactor.shift();
     }
 
-    const { labels, values } = getAggregatedChartData();
-    realtimeChart.data.labels = labels;
-    realtimeChart.data.datasets[0].data = values;
+    // Cek apakah perlu simpan snapshot ke Firebase (jarang)
+    maybeSaveChartData();
 
-    // Update titik — sembunyikan titik kalau data terlalu banyak (mode all)
+    // Update chart tampilan secara realtime (tanpa animasi agar smooth)
+    const { labels, values } = getAggregatedChartData();
+    realtimeChart.data.labels               = labels;
+    realtimeChart.data.datasets[0].data     = values;
+
+    // Sembunyikan titik saat data sudah banyak (performa lebih baik)
     if (timeFilter === 'all') {
-        realtimeChart.data.datasets[0].pointRadius = chartData.labels.length > 200 ? 0 : 2;
+        realtimeChart.data.datasets[0].pointRadius = chartData.labels.length > 150 ? 0 : 2;
     }
 
-    realtimeChart.update('none'); // 'none' = tanpa animasi saat update live (lebih smooth)
+    realtimeChart.update('none'); // 'none' = tanpa animasi, paling cepat untuk realtime
+
+    // Auto-follow: geser view ke titik terbaru secara otomatis,
+    // KECUALI user sedang zoom/pan manual (tidak ingin diganggu).
+    if (timeFilter === 'all' && !_userIsZoomed && realtimeChart.data.labels.length > 0) {
+        _scrollToLatest();
+    }
+
     updateFilterInfo(values);
+}
+
+/**
+ * Geser x-axis chart agar titik terbaru selalu terlihat di sisi kanan.
+ * Tampilkan maksimal 60 titik terakhir di layar agar tidak terlalu padat.
+ */
+function _scrollToLatest() {
+    const total    = realtimeChart.data.labels.length;
+    const visible  = Math.min(60, total);        // jumlah titik yang ditampilkan sekaligus
+    const minIndex = total - visible;
+    const maxIndex = total - 1;
+    try {
+        realtimeChart.zoomScale('x', { min: minIndex, max: maxIndex }, 'none');
+    } catch (_) { /* chart belum siap */ }
 }
 
 function changeParameter() {
     selectedParameter = document.getElementById('parameterSelect').value;
-    if (realtimeChart) realtimeChart.destroy();
-    initChart();
+    _switchParameter(selectedParameter);
+}
+
+/**
+ * Pusat pergantian parameter — dipanggil dari dropdown MAUPUN klik metric card.
+ * Sinkronkan dropdown, highlight card aktif, fade chart.
+ */
+function _switchParameter(param) {
+    selectedParameter = param;
+    _userIsZoomed     = false;
+
+    // Sinkronkan dropdown
+    const sel = document.getElementById('parameterSelect');
+    if (sel) sel.value = param;
+
+    // Highlight metric card yang aktif
+    document.querySelectorAll('.metric-card-compact').forEach(card => {
+        card.classList.toggle('card-active', card.dataset.param === param);
+    });
+
+    // Fade chart
+    const canvas = document.getElementById('realtimeChart');
+    const wrap   = canvas ? canvas.parentElement : null;
+    if (wrap) {
+        wrap.style.transition = 'opacity 0.18s ease';
+        wrap.style.opacity    = '0';
+        setTimeout(() => {
+            if (realtimeChart) realtimeChart.destroy();
+            initChart();
+            wrap.style.opacity = '1';
+        }, 180);
+    } else {
+        if (realtimeChart) realtimeChart.destroy();
+        initChart();
+    }
 }
 
 function clearChartData() {
@@ -528,9 +616,11 @@ function clearChartData() {
         voltage: [], current: [], power: [], frequency: [],
         apparent: [], reactive: [], energy: [], powerFactor: []
     };
+    clearChartDataFromStorage();
+
     if (realtimeChart) {
-        realtimeChart.data.labels = [];
-        realtimeChart.data.datasets[0].data = [];
+        realtimeChart.data.labels            = [];
+        realtimeChart.data.datasets[0].data  = [];
         realtimeChart.update();
     }
     updateFilterInfo([]);
@@ -560,33 +650,68 @@ function switchTab(tabName) {
 // REALTIME DATA LISTENER
 // ====================================
 function initRealtimeListener() {
-    const realtimeRef = database.ref('alat1/RealTime');
-    realtimeRef.on('value', (snapshot) => {
-        if (snapshot.exists()) {
-            realtimeData = snapshot.val();
-            lastDataTimestamp = Date.now();
-            isConnected = true;
-            updateRealtimeUI(realtimeData);
-            updateConnectionStatus(true);
-            checkThresholds(realtimeData);
-        } else {
+    database.ref('alat1/RealTime').on('value', (snapshot) => {
+        if (!snapshot.exists()) {
             isConnected = false;
             updateConnectionStatus(false);
+            return;
         }
+
+        const data = snapshot.val();
+        realtimeData = data;
+
+        // Buat fingerprint dari nilai-nilai sensor utama
+        const fp = `${data.Voltage}|${data.Current}|${data.Power}|${data.Energy}|${data.Frequency}`;
+
+        if (_staleFingerprint === null) {
+            // Fire PERTAMA = data cached dari Firebase (bisa stale).
+            // Simpan fingerprint-nya, tampilkan di card, tapi jangan set ONLINE.
+            _staleFingerprint = fp;
+            updateDisplayCards(data);
+            return;
+        }
+
+        if (fp === _staleFingerprint) {
+            // Firebase fire ke-2 dengan nilai SAMA = server konfirmasi data lama.
+            // Device tidak mengirim data baru → tetap OFFLINE, jangan update chart.
+            return;
+        }
+
+        // Fingerprint BERUBAH = device benar-benar mengirim data baru → ONLINE
+        _staleFingerprint = fp; // update untuk perbandingan berikutnya
+        lastDataTimestamp = Date.now();
+        isConnected       = true;
+        updateRealtimeUI(data);
+        updateConnectionStatus(true);
+        checkThresholds(data);
     }, () => { isConnected = false; updateConnectionStatus(false); });
+}
+
+/** Hanya update card display (nilai sensor), tanpa sentuh chart atau status koneksi. */
+function updateDisplayCards(data) {
+    const now = new Date();
+    document.getElementById('lastUpdate').textContent      = `Last update: ${now.toLocaleTimeString('id-ID')}`;
+    document.getElementById('voltage').textContent         = data.Voltage?.toFixed(2)     || '---';
+    document.getElementById('current').textContent         = data.Current?.toFixed(2)     || '---';
+    document.getElementById('power').textContent           = data.Power?.toFixed(2)       || '---';
+    document.getElementById('frequency').textContent       = data.Frequency?.toFixed(1)   || '---';
+    document.getElementById('apparent').textContent        = data.Apparent?.toFixed(3)    || '---';
+    document.getElementById('reactive').textContent        = data.Reactive?.toFixed(3)    || '---';
+    document.getElementById('energy').textContent          = data.Energy?.toFixed(3)      || '---';
+    document.getElementById('powerFactor').textContent     = data.PowerFactor?.toFixed(3) || '---';
 }
 
 function updateRealtimeUI(data) {
     const now = new Date();
-    document.getElementById('lastUpdate').textContent = `Last update: ${now.toLocaleTimeString('id-ID')}`;
-    document.getElementById('voltage').textContent     = data.Voltage?.toFixed(2)    || '---';
-    document.getElementById('current').textContent     = data.Current?.toFixed(2)     || '---';
-    document.getElementById('power').textContent       = data.Power?.toFixed(2)       || '---';
-    document.getElementById('frequency').textContent   = data.Frequency?.toFixed(1)   || '---';
-    document.getElementById('apparent').textContent    = data.Apparent?.toFixed(3)    || '---';
-    document.getElementById('reactive').textContent    = data.Reactive?.toFixed(3)    || '---';
-    document.getElementById('energy').textContent      = data.Energy?.toFixed(3)      || '---';
-    document.getElementById('powerFactor').textContent = data.PowerFactor?.toFixed(3) || '---';
+    document.getElementById('lastUpdate').textContent      = `Last update: ${now.toLocaleTimeString('id-ID')}`;
+    document.getElementById('voltage').textContent         = data.Voltage?.toFixed(2)     || '---';
+    document.getElementById('current').textContent         = data.Current?.toFixed(2)     || '---';
+    document.getElementById('power').textContent           = data.Power?.toFixed(2)       || '---';
+    document.getElementById('frequency').textContent       = data.Frequency?.toFixed(1)   || '---';
+    document.getElementById('apparent').textContent        = data.Apparent?.toFixed(3)    || '---';
+    document.getElementById('reactive').textContent        = data.Reactive?.toFixed(3)    || '---';
+    document.getElementById('energy').textContent          = data.Energy?.toFixed(3)      || '---';
+    document.getElementById('powerFactor').textContent     = data.PowerFactor?.toFixed(3) || '---';
     updateChart(data);
 }
 
@@ -597,7 +722,7 @@ function updateConnectionStatus(connected) {
     const statusDot  = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     if (connected) {
-        statusDot.classList.add('online'); statusDot.classList.remove('offline');
+        statusDot.classList.add('online');  statusDot.classList.remove('offline');
         statusText.textContent = 'ONLINE';
     } else {
         statusDot.classList.add('offline'); statusDot.classList.remove('online');
@@ -608,7 +733,7 @@ function updateConnectionStatus(connected) {
 function checkDataFreshness() {
     const age   = Date.now() - lastDataTimestamp;
     const fresh = lastDataTimestamp !== 0 && age <= 10000;
-    isConnected = fresh;
+    isConnected  = fresh;
     updateConnectionStatus(fresh);
 }
 
@@ -621,11 +746,9 @@ function startConnectionMonitoring() {
 // HISTORY DATA LISTENER
 // ====================================
 function initHistoryListener() {
-    const historyRef = database.ref('alat1/History');
-    historyRef.on('value', (snapshot) => {
+    database.ref('alat1/History').on('value', (snapshot) => {
         if (snapshot.exists()) {
-            const data = snapshot.val();
-            historyData = Object.values(data);
+            historyData = Object.values(snapshot.val());
             historyData.sort((a, b) => parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp));
             updateHistoryUI(historyData);
         } else {
@@ -637,14 +760,14 @@ function initHistoryListener() {
 function parseTimestamp(timestamp) {
     try {
         const [time, date] = timestamp.split(' ');
-        const [h, m, s] = time.split(':').map(Number);
-        const [d, mo, y] = date.split('/').map(Number);
+        const [h, m, s]    = time.split(':').map(Number);
+        const [d, mo, y]   = date.split('/').map(Number);
         return new Date(y, mo - 1, d, h, m, s);
     } catch (e) { return new Date(); }
 }
 
 function updateHistoryUI(data) {
-    const tbody = document.getElementById('historyTableBody');
+    const tbody        = document.getElementById('historyTableBody');
     const historyCount = document.getElementById('historyCount');
     historyCount.textContent = `${data.length} captured records`;
     if (data.length === 0) {
@@ -779,11 +902,9 @@ async function toggleCapture() {
         }
 
         startCaptureInterval();
-        await showModal(
-            'Capture Diaktifkan',
+        await showModal('Capture Diaktifkan',
             `Mode capture telah diaktifkan.\n\nEnergy counter otomatis direset ke nol.\nData akan disimpan setiap ${captureInterval / 1000} detik ke Firebase History.`,
-            'success', ['ok']
-        );
+            'success', ['ok']);
     } else {
         stopCaptureInterval();
         captureBtn.classList.remove('active');
@@ -841,11 +962,15 @@ async function setCaptureInterval() {
     }
     const intervalSeconds = value * multiplier;
     captureInterval = intervalSeconds * 1000;
-    intervalDisplay.textContent = multiplier === 1   ? `Current: ${value} seconds`
-        : multiplier === 60  ? `Current: ${value} minutes (${intervalSeconds}s)`
-        : `Current: ${value} hours (${intervalSeconds}s)`;
+    intervalDisplay.textContent = multiplier === 1
+        ? `Current: ${value} seconds`
+        : multiplier === 60
+            ? `Current: ${value} minutes (${intervalSeconds}s)`
+            : `Current: ${value} hours (${intervalSeconds}s)`;
     if (captureActive) startCaptureInterval();
-    await showModal('Interval Diperbarui', `Interval capture berhasil diubah menjadi ${value} ${intervalUnit.options[intervalUnit.selectedIndex].text.toLowerCase()}.`, 'success', ['ok']);
+    await showModal('Interval Diperbarui',
+        `Interval capture berhasil diubah menjadi ${value} ${intervalUnit.options[intervalUnit.selectedIndex].text.toLowerCase()}.`,
+        'success', ['ok']);
 }
 
 // ====================================
@@ -854,15 +979,15 @@ async function setCaptureInterval() {
 function loadSettings() {
     const savedThresholds = localStorage.getItem('thresholds');
     if (savedThresholds) thresholds = JSON.parse(savedThresholds);
-
-    const tIds = ['voltageMax','voltageMin','currentMax','powerMax','powerFactorMin','energyLimit'];
-    tIds.forEach(id => { if (document.getElementById(id)) document.getElementById(id).value = thresholds[id]; });
+    ['voltageMax','voltageMin','currentMax','powerMax','powerFactorMin','energyLimit'].forEach(id => {
+        if (document.getElementById(id)) document.getElementById(id).value = thresholds[id];
+    });
 
     const savedPreferences = localStorage.getItem('preferences');
     if (savedPreferences) preferences = JSON.parse(savedPreferences);
-
-    const pIds = ['decimalPlaces','updateRate'];
-    pIds.forEach(id => { if (document.getElementById(id)) document.getElementById(id).value = preferences[id]; });
+    ['decimalPlaces','updateRate'].forEach(id => {
+        if (document.getElementById(id)) document.getElementById(id).value = preferences[id];
+    });
     if (document.getElementById('soundAlerts'))  document.getElementById('soundAlerts').checked  = preferences.soundAlerts;
     if (document.getElementById('visualAlerts')) document.getElementById('visualAlerts').checked = preferences.visualAlerts;
 
@@ -945,7 +1070,7 @@ async function savePreferences() {
 
 async function toggleAutoExport() {
     const selectElement = document.getElementById('autoExportInterval');
-    autoExportInterval = selectElement.value;
+    autoExportInterval  = selectElement.value;
     localStorage.setItem('autoExportInterval', autoExportInterval);
     updateAutoExportStatus();
     if (autoExportInterval === '0') {
@@ -968,12 +1093,31 @@ function updateAutoExportStatus() {
 // INITIALIZE APP
 // ====================================
 document.addEventListener('DOMContentLoaded', () => {
+    // Muat chart dari localStorage (sinkron, tidak perlu async)
+    loadChartDataFromStorage();
+
     initChart();
     const parameterSelect = document.getElementById('parameterSelect');
     if (parameterSelect) parameterSelect.addEventListener('change', changeParameter);
+
+    // Klik metric card → ganti parameter chart
+    document.querySelectorAll('.metric-card-compact').forEach(card => {
+        if (!card.dataset.param) return;
+        card.addEventListener('click', () => _switchParameter(card.dataset.param));
+    });
+    // Highlight card aktif awal (voltage)
+    document.querySelectorAll('.metric-card-compact').forEach(card => {
+        card.classList.toggle('card-active', card.dataset.param === selectedParameter);
+    });
     initRealtimeListener();
     initHistoryListener();
     updateConnectionStatus(false);
     startConnectionMonitoring();
     loadSettings();
+});
+
+// Simpan chart ke localStorage sesaat sebelum tab ditutup atau di-reload.
+// Ini memastikan data terbaru selalu tersimpan meski belum mencapai threshold 60 titik.
+window.addEventListener('beforeunload', () => {
+    saveChartDataToStorage();
 });
