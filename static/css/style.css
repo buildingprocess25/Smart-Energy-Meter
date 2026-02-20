@@ -692,3 +692,69 @@ body {
     z-index: 100;
     letter-spacing: 0.3px;
 }
+/* ============================================================
+   SMART ENERGY MONITOR — additions.css
+   Tambahkan ke bagian bawah style.css
+   ============================================================ */
+
+/* ====================================
+   METRIC CARD — CLICKABLE & ACTIVE STATE
+   ==================================== */
+
+.metric-card-compact {
+    cursor: pointer;
+    position: relative; /* diperlukan untuk ::before tooltip */
+}
+
+/* State aktif saat card dipilih */
+.metric-card-compact.card-active {
+    border-color: transparent;
+    box-shadow: var(--shadow-md);
+}
+
+.metric-card-compact.card-active::after {
+    opacity: 1;
+}
+
+/* Shadow warna per tipe saat aktif */
+.metric-card-compact[data-color="yellow"].card-active { box-shadow: 0 4px 12px rgba(228,0,43,0.15); }
+.metric-card-compact[data-color="blue"].card-active   { box-shadow: 0 4px 12px rgba(26,111,212,0.18); }
+.metric-card-compact[data-color="green"].card-active  { box-shadow: 0 4px 12px rgba(14,155,94,0.18); }
+.metric-card-compact[data-color="purple"].card-active { box-shadow: 0 4px 12px rgba(107,70,193,0.18); }
+
+/* Nilai metric berwarna sesuai accent saat aktif */
+.metric-card-compact.card-active .metric-label-compact { color: var(--text-secondary); }
+.metric-card-compact[data-color="yellow"].card-active .metric-value-compact { color: var(--brand); }
+.metric-card-compact[data-color="blue"].card-active   .metric-value-compact { color: var(--blue); }
+.metric-card-compact[data-color="green"].card-active  .metric-value-compact { color: var(--green); }
+.metric-card-compact[data-color="purple"].card-active .metric-value-compact { color: var(--purple); }
+
+/* Tooltip hint saat hover card yang tidak aktif */
+.metric-card-compact:not(.card-active):hover::before {
+    content: 'Klik untuk tampilkan di chart';
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20,20,20,0.85);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 100;
+    letter-spacing: 0.3px;
+}
+
+/* ====================================
+   CAPTURE BUTTON — DISABLED STATE
+   Saat device offline, tombol capture di-disable
+   ==================================== */
+
+.control-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
