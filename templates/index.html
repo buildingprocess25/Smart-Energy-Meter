@@ -28,6 +28,7 @@
                     <span>Real-time Monitor</span>
                 </div>
             </div>
+
             <div class="status-indicator">
                 <div class="status-dot" id="statusDot"></div>
                 <div class="status-text">
@@ -71,7 +72,6 @@
 
             <!-- ── SUMMARY TAB ── -->
             <div id="realtimeContent" class="tab-content active">
-
                 <div class="summary-topbar">
                     <div class="summary-topbar-left">
                         <h2>Real-time Monitoring</h2>
@@ -81,7 +81,6 @@
                 </div>
 
                 <div class="dashboard-grid">
-
                     <!-- Metric Cards -->
                     <div class="metrics-column">
 
@@ -92,10 +91,7 @@
                                 </svg>
                                 <p class="metric-label-compact">Voltage</p>
                             </div>
-                            <div class="metric-value-compact">
-                                <span id="voltage">---</span>
-                                <span class="metric-unit-compact">V</span>
-                            </div>
+                            <div class="metric-value-compact"><span id="voltage">---</span><span class="metric-unit-compact">V</span></div>
                         </div>
 
                         <div class="metric-card-compact" data-color="blue" data-param="current">
@@ -105,10 +101,7 @@
                                 </svg>
                                 <p class="metric-label-compact">Current</p>
                             </div>
-                            <div class="metric-value-compact">
-                                <span id="current">---</span>
-                                <span class="metric-unit-compact">A</span>
-                            </div>
+                            <div class="metric-value-compact"><span id="current">---</span><span class="metric-unit-compact">A</span></div>
                         </div>
 
                         <div class="metric-card-compact" data-color="green" data-param="power">
@@ -119,10 +112,7 @@
                                 </svg>
                                 <p class="metric-label-compact">Power</p>
                             </div>
-                            <div class="metric-value-compact">
-                                <span id="power">---</span>
-                                <span class="metric-unit-compact">W</span>
-                            </div>
+                            <div class="metric-value-compact"><span id="power">---</span><span class="metric-unit-compact">W</span></div>
                         </div>
 
                         <div class="metric-card-compact" data-color="purple" data-param="frequency">
@@ -133,10 +123,7 @@
                                 </svg>
                                 <p class="metric-label-compact">Frequency</p>
                             </div>
-                            <div class="metric-value-compact">
-                                <span id="frequency">---</span>
-                                <span class="metric-unit-compact">Hz</span>
-                            </div>
+                            <div class="metric-value-compact"><span id="frequency">---</span><span class="metric-unit-compact">Hz</span></div>
                         </div>
 
                         <div class="metric-card-compact" data-color="yellow" data-param="apparent">
@@ -148,10 +135,7 @@
                                 </svg>
                                 <p class="metric-label-compact">Apparent</p>
                             </div>
-                            <div class="metric-value-compact">
-                                <span id="apparent">---</span>
-                                <span class="metric-unit-compact">kVA</span>
-                            </div>
+                            <div class="metric-value-compact"><span id="apparent">---</span><span class="metric-unit-compact">kVA</span></div>
                         </div>
 
                         <div class="metric-card-compact" data-color="blue" data-param="reactive">
@@ -161,10 +145,7 @@
                                 </svg>
                                 <p class="metric-label-compact">Reactive</p>
                             </div>
-                            <div class="metric-value-compact">
-                                <span id="reactive">---</span>
-                                <span class="metric-unit-compact">kVAR</span>
-                            </div>
+                            <div class="metric-value-compact"><span id="reactive">---</span><span class="metric-unit-compact">kVAR</span></div>
                         </div>
 
                         <div class="metric-card-compact" data-color="green" data-param="energy">
@@ -174,10 +155,7 @@
                                 </svg>
                                 <p class="metric-label-compact">Energy</p>
                             </div>
-                            <div class="metric-value-compact">
-                                <span id="energy">---</span>
-                                <span class="metric-unit-compact">kWh</span>
-                            </div>
+                            <div class="metric-value-compact"><span id="energy">---</span><span class="metric-unit-compact">kWh</span></div>
                         </div>
 
                         <div class="metric-card-compact" data-color="purple" data-param="powerFactor">
@@ -188,9 +166,7 @@
                                 </svg>
                                 <p class="metric-label-compact">Power Factor</p>
                             </div>
-                            <div class="metric-value-compact">
-                                <span id="powerFactor">---</span>
-                            </div>
+                            <div class="metric-value-compact"><span id="powerFactor">---</span></div>
                         </div>
 
                     </div><!-- /metrics-column -->
@@ -244,18 +220,27 @@
             <!-- ── DATABASE TAB ── -->
             <div id="historyContent" class="tab-content">
                 <div class="section-header">
-                    <div>
+                    <div class="section-header-left">
                         <h2>History Data</h2>
                         <p id="historyCount">Loading…</p>
                     </div>
-                    <button class="btn-export" onclick="exportSpreadsheet()">
-                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                            <polyline points="7 10 12 15 17 10"></polyline>
-                            <line x1="12" y1="15" x2="12" y2="3"></line>
-                        </svg>
-                        Export Spreadsheet
-                    </button>
+                    <div class="db-toolbar">
+                        <div class="db-search-wrap">
+                            <svg class="db-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                            <input type="text" id="dbSearchInput" class="db-search-input"
+                                placeholder="Cari nama sesi…" autocomplete="off"
+                                oninput="onDbSearchInput(this.value)">
+                            <button class="db-search-clear" id="dbSearchClear" onclick="clearDbSearch()" title="Hapus pencarian">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
                 </div>
                 <div class="table-container">
                     <div class="table-scroll">
@@ -277,108 +262,155 @@
                 </div>
             </div>
 
-            <!-- ── SETTINGS TAB ── -->
-            <div id="settingsContent" class="tab-content">
-                <div class="section-header">
-                    <div>
-                        <h2>System Settings</h2>
-                        <p>Configure monitoring parameters and alerts</p>
+<!-- ── SETTINGS TAB ── -->
+<!-- Replace the entire <div id="settingsContent" …> block with this -->
+
+<div id="settingsContent" class="tab-content">
+    <div class="settings-layout">
+
+        <!-- Kolom kiri: 3 card vertikal -->
+        <div class="settings-col">
+
+            <!-- Card 1: Clear Records -->
+            <div class="control-card">
+                <div class="control-header">
+                    <div class="control-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6l-1 14H6L5 6"></path>
+                            <path d="M10 11v6m4-6v6"></path>
+                        </svg>
+                    </div>
+                    <div class="control-header-text">
+                        <h4>Clear Records</h4>
+                        <p>Hapus semua data history dari database secara permanen</p>
                     </div>
                 </div>
-                <div class="control-panel">
+                <div class="control-divider"></div>
+                <div class="control-action-area">
+                    <button class="control-btn btn-reset" onclick="clearRecords()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6l-1 14H6L5 6"></path>
+                            <path d="M10 11v6m4-6v6"></path>
+                        </svg>
+                        Clear All Records
+                    </button>
+                </div>
+            </div>
 
-                    <div class="control-card">
-                        <div class="control-header">
-                            <div class="control-icon">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <polyline points="3 6 5 6 21 6"></polyline>
-                                    <path d="M19 6l-1 14H6L5 6"></path>
-                                    <path d="M10 11v6m4-6v6"></path>
-                                </svg>
-                            </div>
-                            <div class="control-header-text">
-                                <h4>Clear Records</h4>
-                                <p>Hapus semua data history dari database</p>
-                            </div>
-                        </div>
-                        <button class="control-btn btn-reset" onclick="clearRecords()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="3 6 5 6 21 6"></polyline>
-                                <path d="M19 6l-1 14H6L5 6"></path>
-                                <path d="M10 11v6m4-6v6"></path>
-                            </svg>
-                            Clear Records
-                        </button>
+            <!-- Card 2: Data Capture -->
+            <div class="control-card">
+                <div class="control-header">
+                    <div class="control-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
                     </div>
-
-                    <div class="control-card">
-                        <div class="control-header">
-                            <div class="control-icon">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <circle cx="12" cy="12" r="10"></circle>
-                                    <circle cx="12" cy="12" r="3"></circle>
-                                </svg>
-                            </div>
-                            <div class="control-header-text">
-                                <h4>Data Capture</h4>
-                                <p>Simpan data realtime ke Firebase History</p>
-                            </div>
-                        </div>
-                        <button class="control-btn btn-capture" id="captureBtn" onclick="toggleCapture()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <circle cx="12" cy="12" r="10"></circle>
-                                <polygon points="10 8 16 12 10 16 10 8"></polygon>
-                            </svg>
-                            Start Capture
-                        </button>
+                    <div class="control-header-text">
+                        <h4>Data Capture</h4>
+                        <p>Simpan data realtime ke Firebase History secara berkala</p>
                     </div>
+                </div>
+                <div class="control-divider"></div>
+                <div class="control-action-area">
+                    <button class="control-btn btn-capture" id="captureBtn" onclick="toggleCapture()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polygon points="10 8 16 12 10 16 10 8"></polygon>
+                        </svg>
+                        Start Capture
+                    </button>
+                </div>
+            </div>
 
-                    <div class="control-card">
-                        <div class="control-header">
-                            <div class="control-icon">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <circle cx="12" cy="12" r="10"></circle>
-                                    <polyline points="12 6 12 12 16 14"></polyline>
-                                </svg>
-                            </div>
-                            <div class="control-header-text">
-                                <h4>Capture Interval</h4>
-                                <p id="intervalDisplay">Current: 3 seconds</p>
-                            </div>
-                        </div>
-                        <div class="interval-controls">
-                            <input type="number" id="intervalInput" class="interval-input" value="3" min="1" max="3600">
-                            <select id="intervalUnit" class="interval-select">
-                                <option value="1">Seconds</option>
-                                <option value="60">Minutes</option>
-                                <option value="3600">Hours</option>
-                            </select>
-                            <button class="control-btn btn-set" onclick="setCaptureInterval()">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <polyline points="20 6 9 17 4 12"></polyline>
-                                </svg>
-                                Set
-                            </button>
-                        </div>
+            <!-- Card 3: Capture Interval -->
+            <div class="control-card">
+                <div class="control-header">
+                    <div class="control-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polyline points="12 6 12 12 16 14"></polyline>
+                        </svg>
+                    </div>
+                    <div class="control-header-text">
+                        <h4>Capture Interval</h4>
+                        <p id="intervalDisplay">Current: 3 seconds</p>
+                    </div>
+                </div>
+                <div class="control-divider"></div>
+                <div class="control-action-area">
+                    <div class="interval-controls">
+                        <input type="number" id="intervalInput" class="interval-input" value="3" min="1" max="3600">
+                        <select id="intervalUnit" class="interval-select">
+                            <option value="1">Seconds</option>
+                            <option value="60">Minutes</option>
+                            <option value="3600">Hours</option>
+                        </select>
+                        <button class="control-btn btn-set" onclick="setCaptureInterval()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                            </svg>
+                            Set
+                        </button>
                     </div>
                 </div>
             </div>
 
+        </div><!-- /settings-col kiri -->
+
+        <!-- Kolom kanan: Device Manager -->
+        <div class="settings-col settings-col-wide">
+            <div class="control-card control-card-fill">
+
+                <div class="control-header">
+                    <div class="control-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+                            <path d="M8 21h8M12 17v4"></path>
+                        </svg>
+                    </div>
+                    <div class="control-header-text">
+                        <h4>Manage Devices</h4>
+                        <p>Pilih, lihat status, dan ganti nama perangkat terdaftar</p>
+                    </div>
+                </div>
+
+                <div class="control-divider"></div>
+
+                <!-- ── Active Device Selector (dipindah dari header) ── -->
+                <div class="settings-device-selector-wrap">
+                    <div class="settings-device-selector-left">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+                            <path d="M8 21h8M12 17v4"></path>
+                        </svg>
+                        <span class="settings-device-selector-label">Active Device</span>
+                    </div>
+                    <select id="deviceSelect" class="settings-device-select" onchange="onDeviceChange(this.value)">
+                        <option value="">Memuat device…</option>
+                    </select>
+                </div>
+
+                <div class="control-divider"></div>
+
+                <div id="deviceList" class="device-list">
+                    <p style="color:var(--text-tertiary);font-size:12px">Memuat daftar device…</p>
+                </div>
+
+            </div>
         </div>
-    </main>
+
+    </div><!-- /settings-layout -->
+</div><!-- /settingsContent -->
 
     <!-- ===== MODAL ===== -->
     <div id="customModal" class="modal-overlay">
         <div class="modal-container">
             <button class="modal-close" onclick="closeModal()">&times;</button>
             <div class="modal-content">
-                <div class="modal-icon" id="modalIcon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="12" y1="8" x2="12" y2="12"></line>
-                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                    </svg>
-                </div>
+                <div class="modal-icon" id="modalIcon"></div>
                 <h3 class="modal-title" id="modalTitle">Notification</h3>
                 <p class="modal-message" id="modalMessage"></p>
                 <div class="modal-buttons" id="modalButtons">
@@ -401,13 +433,10 @@
                 </div>
                 <h3 class="modal-title">Mulai Rekaman Baru</h3>
                 <p class="modal-message" style="margin-bottom:14px">Beri nama sesi rekaman ini sebelum memulai.</p>
-                <input type="text" id="sessionNameInput" class="session-name-input"
-                    maxlength="60" autocomplete="off">
+                <input type="text" id="sessionNameInput" class="session-name-input" maxlength="60" autocomplete="off">
                 <div class="modal-buttons" style="margin-top:20px">
                     <button class="modal-btn modal-btn-secondary" onclick="closeSessionNameModal()">BATAL</button>
-                    <button class="modal-btn modal-btn-primary" onclick="confirmStartCapture()">
-                        MULAI REKAM
-                    </button>
+                    <button class="modal-btn modal-btn-primary" onclick="confirmStartCapture()">MULAI REKAM</button>
                 </div>
             </div>
         </div>
@@ -421,7 +450,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script id="firebase-config" type="application/json">{{ firebase_config | tojson }}</script>
-    <script> const firebaseConfig = JSON.parse(document.getElementById('firebase-config').textContent);</script>
+    <script>const firebaseConfig = JSON.parse(document.getElementById('firebase-config').textContent);</script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 
 </body>

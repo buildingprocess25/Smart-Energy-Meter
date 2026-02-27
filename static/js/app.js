@@ -11,30 +11,42 @@ const database = firebase.database();
 // ====================================
 // APP STATE
 // ====================================
-let realtimeData      = null;
-let historyData       = [];
-let isConnected       = false;
-let lastDataTimestamp = 0;
+let realtimeData          = null;
+let isConnected           = false;
+let lastDataTimestamp     = 0;
 let connectionCheckInterval = null;
-let _initialLoad      = true;
+let _initialLoad          = true;
+
+// ====================================
+// DEVICE STATE
+// ====================================
+let selectedDeviceId   = '';
+let selectedDeviceName = '';
+let _deviceListCache   = [];
+let _prevDeviceId      = '';
 
 // ====================================
 // SESSION STATE
 // ====================================
-let currentSessionId  = null;
-let sessionsData      = {};
+let currentSessionId   = null;
+let sessionsData       = {};
 let _renamingSessionId = null;
+
+// ====================================
+// DATABASE FILTER STATE
+// ====================================
+let dbSearchQuery = '';
 
 // ====================================
 // CHART STATE
 // ====================================
-let realtimeChart    = null;
+let realtimeChart     = null;
 let selectedParameter = 'voltage';
-let timeFilter       = 'all';
-let _saveCounter     = 0;
-let _userIsZoomed    = false;
+let timeFilter        = 'all';
+let _saveCounter      = 0;
+let _userIsZoomed     = false;
 
-const MAX_DATA_POINTS    = 300;
+const MAX_DATA_POINTS     = 300;
 const SAVE_EVERY_N_POINTS = 60;
 
 const CHART_KEYS = [
@@ -105,7 +117,7 @@ function saveChartDataToStorage() {
             const payload = {};
             CHART_KEYS.forEach(k => { payload[k] = chartData[k]; });
             localStorage.setItem(CHART_STORAGE_KEY, JSON.stringify(payload));
-        } catch (_) { }
+        } catch (_) {}
     }
 }
 
@@ -118,7 +130,7 @@ function maybeSaveChartData() {
 // ====================================
 const DAILY_AGG_REF  = 'alat1/DailyAgg';
 const DAILY_AGG_KEYS = ['voltage','current','power','frequency','apparent','reactive','energy','powerFactor'];
-let _dailyAgg   = {}, _dailySums = {}, _dailyCounts = {}, _lastDayStr = '';
+let _dailyAgg = {}, _dailySums = {}, _dailyCounts = {}, _lastDayStr = '';
 
 function _todayStr() {
     const d = new Date();
@@ -274,7 +286,7 @@ function updateDisplayCardsBlank() {
 }
 
 // ====================================
-// TIME FILTER
+// TIME FILTER (chart)
 // ====================================
 function setTimeFilter(filter) {
     timeFilter=filter; _userIsZoomed=false;
@@ -289,9 +301,9 @@ function setTimeFilter(filter) {
 // ====================================
 function getFilterConfig() {
     const configs={
-        minute:{buckets:60,bucketMs:60_000,      windowMs:60*60_000,      fmt:'HH:MM'},
-        hour:  {buckets:24,bucketMs:60*60_000,   windowMs:24*60*60_000,   fmt:'HH:00'},
-        '6h':  {buckets:12,bucketMs:30*60_000,   windowMs:6*60*60_000,    fmt:'HH:MM'}
+        minute:{buckets:60,bucketMs:60_000,    windowMs:60*60_000,    fmt:'HH:MM'},
+        hour:  {buckets:24,bucketMs:60*60_000, windowMs:24*60*60_000, fmt:'HH:00'},
+        '6h':  {buckets:12,bucketMs:30*60_000, windowMs:6*60*60_000,  fmt:'HH:MM'}
     };
     return configs[timeFilter]||null;
 }
@@ -489,10 +501,6 @@ function _scrollToLatest() {
     try { realtimeChart.zoomScale('x',{min:total-visible,max:total-1},'none'); } catch(_){}
 }
 
-function resetZoom() {
-    if (realtimeChart) { realtimeChart.resetZoom(); _userIsZoomed=false; }
-}
-
 function changeParameter() { _switchParameter(document.getElementById('parameterSelect').value); }
 
 function _switchParameter(param) {
@@ -523,37 +531,150 @@ function switchTab(tabName) {
 }
 
 // ====================================
+// DEVICE MANAGEMENT
+// ====================================
+async function loadDevices() {
+    try {
+        const res     = await fetch('/api/devices');
+        const devices = await res.json();
+        _deviceListCache = devices;
+
+        const sel = document.getElementById('deviceSelect');
+        if (!sel) return;
+
+        sel.innerHTML = devices.length
+            ? devices.map(d =>
+                `<option value="${d.id}" ${d.id===selectedDeviceId?'selected':''}>
+                    ${d.name||d.id} ${d.online?'🟢':'🔴'}
+                </option>`).join('')
+            : '<option value="">Tidak ada device</option>';
+
+        if (!selectedDeviceId && devices.length) {
+            selectedDeviceId   = devices[0].id;
+            selectedDeviceName = devices[0].name || devices[0].id;
+            sel.value = selectedDeviceId;
+            _attachRealtimeListener(selectedDeviceId);
+            _attachHistoryListener(selectedDeviceId);
+        }
+
+        renderDeviceList(devices);
+    } catch (e) {
+        console.warn('[Devices] Load failed:', e);
+    }
+}
+
+function renderDeviceList(devices) {
+    const container = document.getElementById('deviceList');
+    if (!container) return;
+    if (!devices.length) {
+        container.innerHTML = '<p style="color:var(--text-tertiary);font-size:12px;padding:8px 0">Belum ada device terdaftar</p>';
+        return;
+    }
+    container.innerHTML = devices.map(d => `
+        <div class="device-item">
+            <div class="device-item-info">
+                <span class="device-online-dot ${d.online?'online':'offline'}"></span>
+                <div>
+                    <p class="device-item-name">${d.name||d.id}</p>
+                    <p class="device-item-id">${d.id} · Last seen: ${d.lastSeen||'---'}</p>
+                </div>
+            </div>
+            <div class="device-item-actions">
+                <input type="text" class="device-rename-input" id="rename_${d.id}"
+                    value="${d.name||d.id}" maxlength="40" autocomplete="off"
+                    onkeydown="if(event.key==='Enter') saveDeviceName('${d.id}')">
+                <button class="control-btn btn-set device-save-btn"
+                    onclick="saveDeviceName('${d.id}')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    Simpan
+                </button>
+            </div>
+        </div>`).join('');
+}
+
+async function saveDeviceName(deviceId) {
+    const input   = document.getElementById(`rename_${deviceId}`);
+    const newName = input?.value.trim();
+    if (!newName) { await showModal('Error','Nama tidak boleh kosong','warning',['ok']); return; }
+    try {
+        const res  = await fetch(`/api/devices/${deviceId}/rename`, {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({name: newName})
+        });
+        const json = await res.json();
+        if (json.ok) {
+            const opt = document.querySelector(`#deviceSelect option[value="${deviceId}"]`);
+            if (opt) {
+                const isOnline = opt.textContent.includes('🟢');
+                opt.textContent = `${newName} ${isOnline?'🟢':'🔴'}`;
+            }
+            if (deviceId === selectedDeviceId) selectedDeviceName = newName;
+            // Update cache
+            const dev = _deviceListCache.find(d => d.id === deviceId);
+            if (dev) dev.name = newName;
+            await showModal('Berhasil',`Nama device diubah menjadi:\n"${newName}"`, 'success',['ok']);
+        } else {
+            await showModal('Error', json.error||'Gagal menyimpan','error',['ok']);
+        }
+    } catch (e) {
+        await showModal('Error','Network error: '+e.message,'error',['ok']);
+    }
+}
+
+function onDeviceChange(deviceId) {
+    if (!deviceId || deviceId === selectedDeviceId) return;
+
+    // Detach old listeners
+    if (_prevDeviceId) {
+        database.ref(`devices/${_prevDeviceId}/RealTime`).off();
+        database.ref(`devices/${_prevDeviceId}/History`).off();
+    }
+
+    selectedDeviceId = deviceId;
+    const dev = _deviceListCache.find(d => d.id === deviceId);
+    selectedDeviceName = dev?.name || deviceId;
+
+    // Reset chart
+    CHART_KEYS.forEach(k => { chartData[k] = []; });
+    if (realtimeChart) { realtimeChart.destroy(); realtimeChart = null; }
+    initChart();
+    updateConnectionStatus(false);
+    updateDisplayCardsBlank();
+    lastDataTimestamp = 0;
+
+    // Reset history
+    historyData = []; recordsBySession = {}; sessionsData = {};
+    buildSessionUI();
+
+    // Attach new listeners
+    _attachRealtimeListener(deviceId);
+    _attachHistoryListener(deviceId);
+}
+
+// ====================================
 // REALTIME LISTENER
 // ====================================
-function initRealtimeListener() {
-    let _isFirstSnapshot=true;
-    database.ref('alat1/RealTime').on('value', snapshot=>{
-        if (!snapshot.exists()) {
-            isConnected=false; realtimeData=null;
-            updateConnectionStatus(false); return;
-        }
-        const raw =snapshot.val();
-        const data=normalizeFirebaseData(raw);
-        if (!data) {
-            isConnected=false; realtimeData=null;
-            updateConnectionStatus(false); return;
-        }
-        if (_isFirstSnapshot) { _isFirstSnapshot=false; return; }
-        const isZeroData=(data.Voltage===0&&data.Current===0&&data.Power===0);
-        if (isZeroData) {
-            isConnected=false; realtimeData=null;
-            updateConnectionStatus(false); return;
-        }
-        lastDataTimestamp=Date.now();
-        realtimeData=data;
-        isConnected=true;
+function _attachRealtimeListener(deviceId) {
+    _prevDeviceId = deviceId;
+    let _firstSnap = true;
+    database.ref(`devices/${deviceId}/RealTime`).on('value', snapshot => {
+        if (!snapshot.exists()) { updateConnectionStatus(false); return; }
+        const raw  = snapshot.val();
+        const data = normalizeFirebaseData(raw);
+        if (!data) { updateConnectionStatus(false); return; }
+        if (_firstSnap) { _firstSnap = false; return; }
+        const isZero = data.Voltage===0 && data.Current===0 && data.Power===0;
+        if (isZero) { updateConnectionStatus(false); return; }
+        lastDataTimestamp = Date.now();
+        realtimeData = data;
+        isConnected  = true;
         updateDisplayCards(data);
         updateChart(data);
         updateConnectionStatus(true);
-    }, ()=>{
-        isConnected=false; realtimeData=null;
-        updateConnectionStatus(false);
-    });
+    }, () => updateConnectionStatus(false));
 }
 
 // ====================================
@@ -574,9 +695,9 @@ function updateConnectionStatus(connected) {
 }
 
 function checkDataFreshness() {
-    const age  =Date.now()-lastDataTimestamp;
-    const fresh=lastDataTimestamp!==0&&age<=3000;
-    if (isConnected&&!fresh) {
+    const age  = Date.now()-lastDataTimestamp;
+    const fresh= lastDataTimestamp!==0 && age<=3000;
+    if (isConnected && !fresh) {
         isConnected=false; realtimeData=null;
         updateConnectionStatus(false);
     }
@@ -584,24 +705,45 @@ function checkDataFreshness() {
 
 function startConnectionMonitoring() {
     if (connectionCheckInterval) clearInterval(connectionCheckInterval);
-    connectionCheckInterval=setInterval(checkDataFreshness,2000);
+    connectionCheckInterval = setInterval(checkDataFreshness, 2000);
+}
+
+// ====================================
+// DATABASE SEARCH
+// ====================================
+function onDbSearchInput(value) {
+    dbSearchQuery = value.trim().toLowerCase();
+    const clearBtn = document.getElementById('dbSearchClear');
+    if (clearBtn) clearBtn.classList.toggle('visible', dbSearchQuery.length > 0);
+    buildSessionUI();
+}
+
+function clearDbSearch() {
+    const input = document.getElementById('dbSearchInput');
+    if (input) input.value = '';
+    dbSearchQuery = '';
+    const clearBtn = document.getElementById('dbSearchClear');
+    if (clearBtn) clearBtn.classList.remove('visible');
+    buildSessionUI();
+    input?.focus();
 }
 
 // ====================================
 // HISTORY LISTENER
 // ====================================
-let recordsBySession={};
+let historyData = [];
+let recordsBySession = {};
 
-function initHistoryListener() {
-    database.ref('alat1/History').on('value', snap=>{
+function _attachHistoryListener(deviceId) {
+    database.ref(`devices/${deviceId}/History`).on('value', snap => {
         historyData=[]; recordsBySession={}; sessionsData={};
         if (snap.exists()) {
-            snap.forEach(sessionSnap=>{
-                const sid=sessionSnap.key;
-                recordsBySession[sid]=[];
-                sessionSnap.forEach(recordSnap=>{
+            snap.forEach(sessionSnap => {
+                const sid = sessionSnap.key;
+                recordsBySession[sid] = [];
+                sessionSnap.forEach(recordSnap => {
                     if (recordSnap.key==='_meta') { sessionsData[sid]=recordSnap.val(); return; }
-                    const record={...recordSnap.val(),sessionId:sid};
+                    const record = {...recordSnap.val(), sessionId: sid};
                     historyData.push(record); recordsBySession[sid].push(record);
                 });
             });
@@ -611,34 +753,46 @@ function initHistoryListener() {
 }
 
 function buildSessionUI() {
-    const tbody   =document.getElementById('historyTableBody');
-    const hc      =document.getElementById('historyCount');
-    const sessions=Object.values(sessionsData).sort((a,b)=>(b.startTimestamp||0)-(a.startTimestamp||0));
-    hc.textContent=`${sessions.length} sesi · ${historyData.length} total record`;
-    if (!sessions.length) {
-        tbody.innerHTML='<tr><td colspan="5" class="loading-cell">Belum ada data rekaman</td></tr>'; return;
-    }
+    const tbody      = document.getElementById('historyTableBody');
+    const hc         = document.getElementById('historyCount');
+    const allSessions= Object.values(sessionsData).sort((a,b)=>(b.startTimestamp||0)-(a.startTimestamp||0));
 
-    // Remember which sessions are currently expanded so we can restore after re-render
-    const openSessions = new Set();
-    document.querySelectorAll('.session-detail-row').forEach(row => {
-        if (row.style.display !== 'none') {
-            openSessions.add(row.id.replace('detail_', ''));
+    const filtered = allSessions.filter(session => {
+        if (dbSearchQuery) {
+            const name = (session.name||session.id||'').toLowerCase();
+            if (!name.includes(dbSearchQuery)) return false;
         }
+        return true;
     });
 
-    tbody.innerHTML=sessions.map(session=>{
-        const records =(recordsBySession[session.id]||[]).sort((a,b)=>parseTimestamp(b.timestamp)-parseTimestamp(a.timestamp));
-        const count   =records.length;
-        const isActive=session.id===currentSessionId&&captureActive;
+    if (dbSearchQuery) {
+        hc.textContent = `${filtered.length} dari ${allSessions.length} sesi · ${historyData.length} total record`;
+    } else {
+        hc.textContent = `${allSessions.length} sesi · ${historyData.length} total record`;
+    }
 
-        const innerRows=count?records.map(entry=>{
-            const isOffline =!!entry.offline;
-            const rowStyle  =isOffline?' style="opacity:0.5;font-style:italic;"':'';
-            const offlineTag=isOffline
-                ?' <span style="color:#9CA3AF;font-size:9px;font-weight:700;letter-spacing:0.3px">[offline]</span>'
-                :'';
-            const pfColor=isOffline?'#9CA3AF':(entry.PowerFactor>=0.95?'#00A651':'#ED1C24');
+    if (!filtered.length) {
+        const msg = dbSearchQuery ? 'Tidak ada sesi yang cocok.' : 'Belum ada data rekaman';
+        tbody.innerHTML=`<tr><td colspan="5" class="loading-cell">${msg}</td></tr>`;
+        return;
+    }
+
+    const openSessions = new Set();
+    document.querySelectorAll('.session-detail-row').forEach(row => {
+        if (row.style.display !== 'none') openSessions.add(row.id.replace('detail_',''));
+    });
+
+    tbody.innerHTML = filtered.map(session => {
+        const records  = (recordsBySession[session.id]||[]).sort((a,b)=>parseTimestamp(b.timestamp)-parseTimestamp(a.timestamp));
+        const count    = records.length;
+        const isActive = session.id===currentSessionId && captureActive;
+
+        const innerRows = count ? records.map(entry => {
+            const isOffline  = !!entry.offline;
+            const rowStyle   = isOffline ? ' style="opacity:0.5;font-style:italic;"' : '';
+            const offlineTag = isOffline
+                ? ' <span style="color:#9CA3AF;font-size:9px;font-weight:700">[offline]</span>' : '';
+            const pfColor    = isOffline ? '#9CA3AF' : (entry.PowerFactor>=0.95?'#00A651':'#ED1C24');
             return `<tr class="inner-record-row"${rowStyle}>
                 <td>${entry.timestamp}${offlineTag}</td>
                 <td>${entry.Voltage?.toFixed(2)    ??'---'}</td>
@@ -647,15 +801,21 @@ function buildSessionUI() {
                 <td>${entry.Energy?.toFixed(3)     ??'---'}</td>
                 <td style="color:${pfColor}">${entry.PowerFactor?.toFixed(3)??'---'}</td>
             </tr>`;
-        }).join(''):`<tr><td colspan="6" class="loading-cell" style="padding:20px !important">Belum ada record dalam sesi ini</td></tr>`;
+        }).join('') : `<tr><td colspan="6" class="loading-cell" style="padding:20px !important">Belum ada record</td></tr>`;
 
-        const innerTable=`<div class="session-inner-wrap"><table class="data-table inner-table">
+        const innerTable = `<div class="session-inner-wrap"><table class="data-table inner-table">
             <thead><tr><th>Timestamp</th><th>Voltage (V)</th><th>Current (A)</th><th>Power (W)</th><th>Energy (kWh)</th><th>PF</th></tr></thead>
             <tbody>${innerRows}</tbody></table></div>`;
 
-        const endTimeCell=isActive
-            ?`<td><span style="color:#00A651;font-weight:700">Sedang berlangsung...</span></td>`
-            :`<td>${session.endTime||'---'}</td>`;
+        const endTimeCell = isActive
+            ? `<td><span style="color:#00A651;font-weight:700">Sedang berlangsung...</span></td>`
+            : `<td>${session.endTime||'---'}</td>`;
+
+        const rawName = session.name || 'Tanpa nama';
+        const displayName = dbSearchQuery
+            ? rawName.replace(new RegExp(`(${dbSearchQuery.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`, 'gi'),
+                '<mark class="search-highlight">$1</mark>')
+            : rawName;
 
         return `
         <tr class="session-row${isActive?' session-active':''}" onclick="toggleSessionDetail('${session.id}')">
@@ -664,7 +824,7 @@ function buildSessionUI() {
                 <span class="session-id-badge" title="${session.id}">${session.id.replace('session_','')}</span>
             </td>
             <td class="session-name-cell">
-                <span class="session-name">${session.name||'Tanpa nama'}</span>
+                <span class="session-name">${displayName}</span>
                 ${isActive?'<span class="session-live-badge">&#9679; LIVE</span>':''}
             </td>
             <td>${session.startTime||'---'}</td>
@@ -690,7 +850,6 @@ function buildSessionUI() {
         </tr>`;
     }).join('');
 
-    // Restore previously expanded sessions
     openSessions.forEach(sessionId => {
         const detail  = document.getElementById(`detail_${sessionId}`);
         const chevron = document.getElementById(`chevron_${sessionId}`);
@@ -700,128 +859,72 @@ function buildSessionUI() {
 }
 
 function toggleSessionDetail(sessionId) {
-    const detail =document.getElementById(`detail_${sessionId}`);
-    const chevron=document.getElementById(`chevron_${sessionId}`);
+    const detail  = document.getElementById(`detail_${sessionId}`);
+    const chevron = document.getElementById(`chevron_${sessionId}`);
     if (!detail) return;
-    const isOpen=detail.style.display!=='none';
-    detail.style.display=isOpen?'none':'table-row';
-    if (chevron) chevron.textContent=isOpen?'\u25B6':'\u25BC';
+    const isOpen = detail.style.display !== 'none';
+    detail.style.display = isOpen ? 'none' : 'table-row';
+    if (chevron) chevron.textContent = isOpen ? '\u25B6' : '\u25BC';
 }
 
 function parseTimestamp(timestamp) {
     try {
-        const [time,date]=timestamp.split(' ');
-        const [h,m,s]   =time.split(':').map(Number);
-        const [d,mo,y]  =date.split('/').map(Number);
+        const [time,date] = timestamp.split(' ');
+        const [h,m,s]     = time.split(':').map(Number);
+        const [d,mo,y]    = date.split('/').map(Number);
         return new Date(y,mo-1,d,h,m,s);
-    } catch(e){ return new Date(); }
+    } catch(e) { return new Date(); }
 }
 
 // ====================================
 // EXCEL HELPERS
 // ====================================
 function _buildExcelRow(entry, sessionLabel) {
-    const row={};
-    if (sessionLabel!==undefined) row['Sesi']=sessionLabel;
-    row['Timestamp']               =entry.timestamp     ??'';
-    row['Status']                  =entry.offline?'OFFLINE':'online';
-    row['Voltage (V)']             =entry.Voltage       !=null?parseFloat(entry.Voltage.toFixed(2))       :'';
-    row['Current (A)']             =entry.Current       !=null?parseFloat(entry.Current.toFixed(2))       :'';
-    row['Power (W)']               =entry.Power         !=null?parseFloat(entry.Power.toFixed(2))         :'';
-    row['Apparent Power (kVA)']    =entry.Apparent      !=null?parseFloat(entry.Apparent.toFixed(4))      :'';
-    row['Reactive Power (kVAR)']   =entry.Reactive      !=null?parseFloat(entry.Reactive.toFixed(4))      :'';
-    row['Power Factor']            =entry.PowerFactor   !=null?parseFloat(entry.PowerFactor.toFixed(4))   :'';
-    row['Phase Angle (°)']         =entry.Phase1        !=null?parseFloat(entry.Phase1.toFixed(3))        :'';
-    row['Frequency (Hz)']          =entry.Frequency     !=null?parseFloat(entry.Frequency.toFixed(1))     :'';
-    row['Active Energy (kWh)']     =entry.Energy        !=null?parseFloat(entry.Energy.toFixed(4))        :'';
-    row['Apparent Energy (kVAh)']  =entry.EnergyApparent!=null?parseFloat(entry.EnergyApparent.toFixed(4)):'';
-    row['Reactive Energy (kVARh)'] =entry.EnergyReactive!=null?parseFloat(entry.EnergyReactive.toFixed(4)):'';
+    const row = {};
+    if (sessionLabel!==undefined) row['Sesi'] = sessionLabel;
+    row['Timestamp']               = entry.timestamp      ?? '';
+    row['Status']                  = entry.offline ? 'OFFLINE' : 'online';
+    row['Voltage (V)']             = entry.Voltage        != null ? parseFloat(entry.Voltage.toFixed(2))        : '';
+    row['Current (A)']             = entry.Current        != null ? parseFloat(entry.Current.toFixed(2))        : '';
+    row['Power (W)']               = entry.Power          != null ? parseFloat(entry.Power.toFixed(2))          : '';
+    row['Apparent Power (kVA)']    = entry.Apparent       != null ? parseFloat(entry.Apparent.toFixed(4))       : '';
+    row['Reactive Power (kVAR)']   = entry.Reactive       != null ? parseFloat(entry.Reactive.toFixed(4))       : '';
+    row['Power Factor']            = entry.PowerFactor    != null ? parseFloat(entry.PowerFactor.toFixed(4))    : '';
+    row['Phase Angle (°)']         = entry.Phase1         != null ? parseFloat(entry.Phase1.toFixed(3))         : '';
+    row['Frequency (Hz)']          = entry.Frequency      != null ? parseFloat(entry.Frequency.toFixed(1))      : '';
+    row['Active Energy (kWh)']     = entry.Energy         != null ? parseFloat(entry.Energy.toFixed(4))         : '';
+    row['Apparent Energy (kVAh)']  = entry.EnergyApparent != null ? parseFloat(entry.EnergyApparent.toFixed(4)) : '';
+    row['Reactive Energy (kVARh)'] = entry.EnergyReactive != null ? parseFloat(entry.EnergyReactive.toFixed(4)) : '';
     return row;
 }
 
-const _COL_WIDTHS_WITH_SESSION=[
-    {wch:28},{wch:20},{wch:10},
+const _COL_WIDTHS = [
+    {wch:20},{wch:10},
     {wch:13},{wch:13},{wch:13},
     {wch:20},{wch:20},{wch:14},
     {wch:16},{wch:14},
     {wch:20},{wch:22},{wch:22}
 ];
-const _COL_WIDTHS_NO_SESSION=_COL_WIDTHS_WITH_SESSION.slice(1);
 
 // ====================================
-// EXPORT ALL
-// ====================================
-async function exportSpreadsheet() {
-    if (!historyData.length) { await showModal('Tidak Ada Data','Tidak ada data untuk diekspor!','warning',['ok']); return; }
-    const confirmed=await showModal('Konfirmasi Export',
-        `Ekspor ${historyData.length} record ke Excel?\n\nSetelah ekspor, data DIHAPUS dari Firebase!`,'warning',['confirm']);
-    if (!confirmed) return;
-    try {
-        const sessions  =Object.values(sessionsData).sort((a,b)=>(a.startTimestamp||0)-(b.startTimestamp||0));
-        const onlineRows=historyData.filter(e=>!e.offline);
-        const excelData =historyData.map(e=>{
-            const sess=sessionsData[e.sessionId];
-            return _buildExcelRow(e,sess?.name||e.sessionId||'---');
-        });
-        const ws=XLSX.utils.json_to_sheet(excelData);
-        ws['!cols']=_COL_WIDTHS_WITH_SESSION;
-        const avg=f=>onlineRows.length?onlineRows.reduce((s,e)=>s+(e[f]||0),0)/onlineRows.length:0;
-        const sum=f=>onlineRows.reduce((s,e)=>s+(e[f]||0),0);
-        const wsMeta=XLSX.utils.aoa_to_sheet([
-            ['Smart Energy Monitor - Export Report'],[''],
-            ['Export Date',new Date().toLocaleString('id-ID')],
-            ['Total Sesi',sessions.length],['Total Records',historyData.length],
-            ['Records Online',onlineRows.length],
-            ['Records Offline (nilai=0)',historyData.length-onlineRows.length],
-            ['Device ID','alat1'],[''],
-            ['Summary Statistics (data online saja)'],[''],
-            ['Parameter','Rata-rata','Satuan'],
-            ['Voltage',avg('Voltage').toFixed(2),'V'],
-            ['Current',avg('Current').toFixed(2),'A'],
-            ['Power',avg('Power').toFixed(2),'W'],
-            ['Apparent Power',avg('Apparent').toFixed(4),'kVA'],
-            ['Reactive Power',avg('Reactive').toFixed(4),'kVAR'],
-            ['Power Factor',avg('PowerFactor').toFixed(4),''],
-            ['Phase Angle',avg('Phase1').toFixed(3),'°'],
-            ['Frequency',avg('Frequency').toFixed(1),'Hz'],
-            ['Total Active Energy',sum('Energy').toFixed(4),'kWh'],
-            ['Total Apparent Energy',sum('EnergyApparent').toFixed(4),'kVAh'],
-            ['Total Reactive Energy',sum('EnergyReactive').toFixed(4),'kVARh'],[''],
-            ['Daftar Sesi'],
-            ['No','Nama Sesi','Waktu Mulai','Waktu Selesai','Records'],
-            ...sessions.map((s,i)=>[i+1,s.name||'---',s.startTime||'---',s.endTime||'Belum selesai',s.recordCount||'---'])
-        ]);
-        wsMeta['!cols']=[{wch:28},{wch:18},{wch:10},{wch:22},{wch:22},{wch:15}];
-        const wb=XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb,ws,'Energy History');
-        XLSX.utils.book_append_sheet(wb,wsMeta,'Summary');
-        XLSX.writeFile(wb,`Smart_Energy_History_${new Date().toISOString().split('T')[0]}_${Date.now()}.xlsx`);
-        await database.ref('alat1/History').remove();
-        historyData=[]; recordsBySession={}; sessionsData={};
-        buildSessionUI();
-        await showModal('Export Berhasil!','Data disimpan ke Excel dan history Firebase dihapus.','success',['ok']);
-    } catch(error){ await showModal('Export Gagal','Error: '+error.message,'error',['ok']); }
-}
-
-// ====================================
-// EXPORT SINGLE SESSION
+// EXPORT SESSION
 // ====================================
 async function exportSession(sessionId, sessionName, event) {
     event.stopPropagation();
-    const records=recordsBySession[sessionId]||[];
+    const records = recordsBySession[sessionId] || [];
     if (!records.length) { await showModal('Tidak Ada Data',`Sesi "${sessionName}" belum memiliki record.`,'warning',['ok']); return; }
-    const confirmed=await showModal('Export Sesi',
+    const confirmed = await showModal('Export Sesi',
         `Ekspor ${records.length} record dari sesi:\n"${sessionName}"\n\nData Firebase TIDAK dihapus. Lanjutkan?`,'info',['confirm']);
     if (!confirmed) return;
     try {
-        const session   =sessionsData[sessionId];
-        const onlineRows=records.filter(e=>!e.offline);
-        const excelData =records.sort((a,b)=>parseTimestamp(a.timestamp)-parseTimestamp(b.timestamp)).map(e=>_buildExcelRow(e));
-        const ws=XLSX.utils.json_to_sheet(excelData);
-        ws['!cols']=_COL_WIDTHS_NO_SESSION;
-        const avg=f=>onlineRows.length?onlineRows.reduce((s,e)=>s+(e[f]||0),0)/onlineRows.length:0;
-        const sum=f=>onlineRows.reduce((s,e)=>s+(e[f]||0),0);
-        const wsMeta=XLSX.utils.aoa_to_sheet([
+        const session    = sessionsData[sessionId];
+        const onlineRows = records.filter(e=>!e.offline);
+        const excelData  = records.sort((a,b)=>parseTimestamp(a.timestamp)-parseTimestamp(b.timestamp)).map(e=>_buildExcelRow(e));
+        const ws         = XLSX.utils.json_to_sheet(excelData);
+        ws['!cols']      = _COL_WIDTHS;
+        const avg = f => onlineRows.length ? onlineRows.reduce((s,e)=>s+(e[f]||0),0)/onlineRows.length : 0;
+        const sum = f => onlineRows.reduce((s,e)=>s+(e[f]||0),0);
+        const wsMeta = XLSX.utils.aoa_to_sheet([
             ['Smart Energy Monitor - Session Export'],[''],
             ['Nama Sesi',sessionName],
             ['Export Date',new Date().toLocaleString('id-ID')],
@@ -829,9 +932,9 @@ async function exportSession(sessionId, sessionName, event) {
             ['Waktu Selesai',session?.endTime||'Berlangsung'],
             ['Total Records',records.length],
             ['Records Online',onlineRows.length],
-            ['Records Offline (nilai=0)',records.length-onlineRows.length],
-            ['Device ID','alat1'],[''],
-            ['Summary Statistics (data online saja)'],[''],
+            ['Records Offline',records.length-onlineRows.length],
+            ['Device ID', selectedDeviceId],[''],
+            ['Summary Statistics (online saja)'],[''],
             ['Parameter','Rata-rata','Satuan'],
             ['Voltage',avg('Voltage').toFixed(2),'V'],
             ['Current',avg('Current').toFixed(2),'A'],
@@ -845,66 +948,55 @@ async function exportSession(sessionId, sessionName, event) {
             ['Total Apparent Energy',sum('EnergyApparent').toFixed(4),'kVAh'],
             ['Total Reactive Energy',sum('EnergyReactive').toFixed(4),'kVARh'],
         ]);
-        wsMeta['!cols']=[{wch:28},{wch:18},{wch:10}];
-        const wb=XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb,ws,'Data');
-        XLSX.utils.book_append_sheet(wb,wsMeta,'Summary');
-        XLSX.writeFile(wb,`${sessionName.replace(/[\\/:*?"<>|]/g,'_')}.xlsx`);
-        await showModal('Export Berhasil!',`${records.length} record dari sesi "${sessionName}" berhasil diekspor.`,'success',['ok']);
-    } catch(error){ await showModal('Export Gagal','Error: '+error.message,'error',['ok']); }
+        wsMeta['!cols'] = [{wch:28},{wch:18},{wch:10}];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Data');
+        XLSX.utils.book_append_sheet(wb, wsMeta, 'Summary');
+        XLSX.writeFile(wb, `${sessionName.replace(/[\\/:*?"<>|]/g,'_')}.xlsx`);
+        await showModal('Export Berhasil!',`${records.length} record dari "${sessionName}" berhasil diekspor.`,'success',['ok']);
+    } catch(error) { await showModal('Export Gagal','Error: '+error.message,'error',['ok']); }
 }
 
 // ====================================
 // CLEAR ALL RECORDS
 // ====================================
 async function clearRecords() {
-    if (!historyData.length&&!Object.keys(sessionsData).length) {
+    if (!historyData.length && !Object.keys(sessionsData).length) {
         await showModal('Tidak Ada Data','Tidak ada history yang perlu dihapus.','info',['ok']); return;
     }
-    const confirmed=await showModal('Konfirmasi Hapus Record',
-        'Hapus SEMUA sesi & record dari Firebase?\n\nData TIDAK DAPAT dikembalikan.','warning',['confirm']);
+    const confirmed = await showModal('Konfirmasi Hapus Record',
+        `Hapus SEMUA sesi & record device "${selectedDeviceName}"?\n\nData TIDAK DAPAT dikembalikan.`,'warning',['confirm']);
     if (!confirmed) return;
     try {
-        await database.ref('alat1/History').remove();
+        await database.ref(`devices/${selectedDeviceId}/History`).remove();
         historyData=[]; recordsBySession={}; sessionsData={};
         buildSessionUI();
         await showModal('Berhasil Dihapus','Semua data rekaman telah dihapus.','success',['ok']);
-    } catch(error){ await showModal('Error','Gagal menghapus! Error: '+error.message,'error',['ok']); }
+    } catch(error) { await showModal('Error','Gagal menghapus! Error: '+error.message,'error',['ok']); }
 }
 
 // ====================================
-// CAPTURE UI STATE (driven by server)
+// CAPTURE UI STATE
 // ====================================
-let captureActive   = false;   // mirrors server state
-let captureInterval = 3000;    // ms — for display only
-
+let captureActive   = false;
+let captureInterval = 3000;
 let _captureStatusPollId = null;
 
-/** Pull /api/capture/status and sync the UI. */
 async function syncCaptureStatus() {
     try {
         const res  = await fetch('/api/capture/status');
         const json = await res.json();
         _applyCaptureStatus(json);
-    } catch (e) {
-        console.warn('[Capture] Status poll failed:', e);
-    }
+    } catch (e) { console.warn('[Capture] Status poll failed:', e); }
 }
 
 function _applyCaptureStatus(status) {
-    captureActive      = status.active;
-    captureInterval    = (status.interval || 3) * 1000;
-    currentSessionId   = status.session_id || null;
-
+    captureActive    = status.active;
+    captureInterval  = (status.interval || 3) * 1000;
+    currentSessionId = status.session_id || null;
     _updateCaptureButtonUI(status.active);
-
-    // Update interval display to match server
     const id = document.getElementById('intervalDisplay');
-    if (id && status.interval) {
-        id.textContent = `Current: ${status.interval} seconds (server)`;
-    }
-
-    // Rebuild table so LIVE badge & "sedang berlangsung" stay accurate
+    if (id && status.interval) id.textContent = `Current: ${status.interval} seconds (server)`;
     buildSessionUI();
 }
 
@@ -913,41 +1005,35 @@ function _startStatusPolling() {
     _captureStatusPollId = setInterval(syncCaptureStatus, 4000);
 }
 
-function _stopStatusPolling() {
-    if (_captureStatusPollId) { clearInterval(_captureStatusPollId); _captureStatusPollId = null; }
-}
-
 // ====================================
-// CAPTURE BUTTON HELPERS
+// CAPTURE BUTTON
 // ====================================
 function _captureStartHTML() {
-    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> START CAPTURE`;
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> Start Capture`;
 }
 function _captureStopHTML() {
-    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg> STOP CAPTURE`;
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg> Stop Capture`;
 }
 
 function _updateCaptureButtonUI(active) {
-    const btn=document.getElementById('captureBtn');
+    const btn = document.getElementById('captureBtn');
     if (!btn) return;
-    btn.classList.toggle('active',active);
-    btn.innerHTML=active?_captureStopHTML():_captureStartHTML();
+    btn.classList.toggle('active', active);
+    btn.innerHTML = active ? _captureStopHTML() : _captureStartHTML();
 }
 
 // ====================================
-// TOGGLE CAPTURE — calls server API
+// TOGGLE CAPTURE
 // ====================================
 async function toggleCapture() {
     if (!captureActive) {
+        if (!selectedDeviceId) { await showModal('Pilih Device','Pilih device terlebih dahulu.','warning',['ok']); return; }
         if (!isConnected) {
-            await showModal('Device Offline',
-                'Tidak dapat memulai capture.\nPastikan device menyala dan terhubung ke jaringan.',
-                'error', ['ok']);
-            return;
+            await showModal('Device Offline','Tidak dapat memulai capture.\nPastikan device menyala.','error',['ok']); return;
         }
         openSessionNameModal();
     } else {
-        const confirmed=await showModal('Hentikan Rekaman',
+        const confirmed = await showModal('Hentikan Rekaman',
             'Hentikan sesi rekaman yang sedang berlangsung?\n\nData sudah tersimpan di Firebase.','warning',['confirm']);
         if (!confirmed) return;
         await _apiStopCapture();
@@ -956,29 +1042,26 @@ async function toggleCapture() {
 
 async function _apiStopCapture() {
     try {
-        const res=await fetch('/api/capture/stop',{method:'POST'});
-        const json=await res.json();
+        const res  = await fetch('/api/capture/stop', {method:'POST'});
+        const json = await res.json();
         if (json.ok) {
-            captureActive=false;
-            currentSessionId=null;
+            captureActive=false; currentSessionId=null;
             _updateCaptureButtonUI(false);
             buildSessionUI();
         } else {
             await showModal('Error','Gagal menghentikan: '+json.error,'error',['ok']);
         }
-    } catch(e){
-        await showModal('Error','Network error: '+e.message,'error',['ok']);
-    }
+    } catch(e) { await showModal('Error','Network error: '+e.message,'error',['ok']); }
 }
 
 // ====================================
 // SESSION NAME MODAL
 // ====================================
 function openSessionNameModal() {
-    const modal=document.getElementById('sessionNameModal');
-    const input=document.getElementById('sessionNameInput');
-    const now=new Date(), pad=v=>String(v).padStart(2,'0');
-    input.value=`Rekaman ${pad(now.getDate())}/${pad(now.getMonth()+1)}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    const modal = document.getElementById('sessionNameModal');
+    const input = document.getElementById('sessionNameInput');
+    const now   = new Date(), pad = v => String(v).padStart(2,'0');
+    input.value = `Rekaman ${pad(now.getDate())}/${pad(now.getMonth()+1)}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
     modal.classList.add('active'); document.body.style.overflow='hidden';
     setTimeout(()=>{ input.focus(); input.select(); },120);
 }
@@ -990,70 +1073,66 @@ function closeSessionNameModal() {
 }
 
 function _resetSessionModal() {
-    const modal=document.getElementById('sessionNameModal');
-    modal.querySelector('.modal-title').textContent  ='Mulai Rekaman Baru';
-    modal.querySelector('.modal-message').textContent='Beri nama sesi rekaman ini sebelum memulai.';
-    const btn=modal.querySelector('.modal-btn-primary');
-    btn.innerHTML='&#9654; MULAI REKAM'; btn.onclick=confirmStartCapture;
+    const modal = document.getElementById('sessionNameModal');
+    modal.querySelector('.modal-title').textContent   = 'Mulai Rekaman Baru';
+    modal.querySelector('.modal-message').textContent = 'Beri nama sesi rekaman ini sebelum memulai.';
+    const btn = modal.querySelector('.modal-btn-primary');
+    btn.innerHTML = '&#9654; MULAI REKAM'; btn.onclick = confirmStartCapture;
 }
 
 function openRenameModal(sessionId, currentName, event) {
     event.stopPropagation();
-    _renamingSessionId=sessionId;
-    const modal=document.getElementById('sessionNameModal');
-    const input=document.getElementById('sessionNameInput');
-    modal.querySelector('.modal-title').textContent  ='Rename Sesi';
-    modal.querySelector('.modal-message').textContent='Ubah nama sesi rekaman ini.';
-    const btn=modal.querySelector('.modal-btn-primary');
-    btn.innerHTML='SIMPAN NAMA'; btn.onclick=confirmRenameSession;
-    input.value=currentName;
+    _renamingSessionId = sessionId;
+    const modal = document.getElementById('sessionNameModal');
+    const input = document.getElementById('sessionNameInput');
+    modal.querySelector('.modal-title').textContent   = 'Rename Sesi';
+    modal.querySelector('.modal-message').textContent = 'Ubah nama sesi rekaman ini.';
+    const btn = modal.querySelector('.modal-btn-primary');
+    btn.innerHTML = 'SIMPAN NAMA'; btn.onclick = confirmRenameSession;
+    input.value = currentName;
     modal.classList.add('active'); document.body.style.overflow='hidden';
     setTimeout(()=>{ input.focus(); input.select(); },120);
 }
 
 async function confirmRenameSession() {
-    const input  =document.getElementById('sessionNameInput');
-    const newName=input.value.trim();
+    const input   = document.getElementById('sessionNameInput');
+    const newName = input.value.trim();
     if (!newName) { await showModal('Nama Kosong','Nama sesi tidak boleh kosong.','warning',['ok']); return; }
-    const targetId=_renamingSessionId;
+    const targetId = _renamingSessionId;
     closeSessionNameModal();
     if (!targetId) return;
     try {
-        await database.ref(`alat1/History/${targetId}/_meta`).update({name:newName});
-        if (sessionsData[targetId]) sessionsData[targetId].name=newName;
+        await database.ref(`devices/${selectedDeviceId}/History/${targetId}/_meta`).update({name: newName});
+        if (sessionsData[targetId]) sessionsData[targetId].name = newName;
         buildSessionUI();
         await showModal('Berhasil',`Nama sesi diubah menjadi:\n"${newName}"`,'success',['ok']);
-    } catch(e){ await showModal('Error','Gagal mengubah nama! Error: '+e.message,'error',['ok']); }
+    } catch(e) { await showModal('Error','Gagal mengubah nama! Error: '+e.message,'error',['ok']); }
 }
 
-/** Called when user clicks "MULAI REKAM" in the session-name modal. */
 async function confirmStartCapture() {
-    const input       =document.getElementById('sessionNameInput');
-    const sessionName =(input.value.trim())||`Rekaman ${new Date().toLocaleTimeString('id-ID')}`;
-    const intervalSec =Math.round(captureInterval/1000)||3;
+    const input       = document.getElementById('sessionNameInput');
+    const sessionName = (input.value.trim()) || `Rekaman ${new Date().toLocaleTimeString('id-ID')}`;
+    const intervalSec = Math.round(captureInterval/1000) || 3;
     closeSessionNameModal();
 
     try {
-        const res=await fetch('/api/capture/start',{
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({sessionName,interval:intervalSec})
+        const res  = await fetch('/api/capture/start', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({sessionName, interval: intervalSec, deviceId: selectedDeviceId})
         });
-        const json=await res.json();
+        const json = await res.json();
         if (!json.ok) { await showModal('Error','Gagal memulai capture: '+(json.error||''),'error',['ok']); return; }
 
-        captureActive    =true;
-        currentSessionId =json.session_id;
+        captureActive    = true;
+        currentSessionId = json.session_id;
         _updateCaptureButtonUI(true);
         buildSessionUI();
 
-        await showModal('Capture Diaktifkan (Server)',
-            `Sesi: "${json.session_name}"\n\nRekaman dijalankan di SERVER — tetap berjalan meski tab/browser ditutup.\nInterval: ${intervalSec}s`,
+        await showModal('Capture Diaktifkan',
+            `Sesi: "${json.session_name}"\nDevice: ${selectedDeviceName}\n\nRekaman berjalan di server.\nInterval: ${intervalSec}s`,
             'success',['ok']);
-
-    } catch(e){
-        await showModal('Error','Network error: '+e.message,'error',['ok']);
-    }
+    } catch(e) { await showModal('Error','Network error: '+e.message,'error',['ok']); }
 }
 
 // ====================================
@@ -1061,43 +1140,42 @@ async function confirmStartCapture() {
 // ====================================
 async function deleteSession(sessionId, sessionName, event) {
     event.stopPropagation();
-    const confirmed=await showModal('Hapus Sesi',
-        `Hapus sesi:\n"${sessionName}"\n\nSemua record akan ikut terhapus dan TIDAK DAPAT dikembalikan.`,'warning',['confirm']);
+    const confirmed = await showModal('Hapus Sesi',
+        `Hapus sesi:\n"${sessionName}"\n\nSemua record akan ikut terhapus.`,'warning',['confirm']);
     if (!confirmed) return;
     try {
-        await database.ref(`alat1/History/${sessionId}`).remove();
+        await database.ref(`devices/${selectedDeviceId}/History/${sessionId}`).remove();
         delete sessionsData[sessionId]; delete recordsBySession[sessionId];
-        historyData=historyData.filter(r=>r.sessionId!==sessionId);
+        historyData = historyData.filter(r=>r.sessionId!==sessionId);
         buildSessionUI();
         await showModal('Sesi Dihapus',`Sesi "${sessionName}" berhasil dihapus.`,'success',['ok']);
-    } catch(e){ await showModal('Error','Gagal menghapus! Error: '+e.message,'error',['ok']); }
+    } catch(e) { await showModal('Error','Gagal menghapus! Error: '+e.message,'error',['ok']); }
 }
 
 // ====================================
 // SET CAPTURE INTERVAL
 // ====================================
 async function setCaptureInterval() {
-    const ii=document.getElementById('intervalInput');
-    const iu=document.getElementById('intervalUnit');
-    const id=document.getElementById('intervalDisplay');
-    const value=parseInt(ii.value), multiplier=parseInt(iu.value);
-    if (isNaN(value)||value<1) {
+    const ii = document.getElementById('intervalInput');
+    const iu = document.getElementById('intervalUnit');
+    const id = document.getElementById('intervalDisplay');
+    const value = parseInt(ii.value), multiplier = parseInt(iu.value);
+    if (isNaN(value) || value < 1) {
         await showModal('Input Tidak Valid','Masukkan nilai interval yang valid (minimal 1)!','warning',['ok']); return;
     }
-    const totalSec=value*multiplier;
-    captureInterval=totalSec*1000;
-    const unitLabel=iu.options[iu.selectedIndex].text.toLowerCase();
-    id.textContent=multiplier===1?`Current: ${value} seconds`:`Current: ${value} ${unitLabel} (${totalSec}s)`;
+    const totalSec  = value * multiplier;
+    captureInterval = totalSec * 1000;
+    const unitLabel = iu.options[iu.selectedIndex].text.toLowerCase();
+    id.textContent  = multiplier===1 ? `Current: ${value} seconds` : `Current: ${value} ${unitLabel} (${totalSec}s)`;
 
-    // Tell server to update interval (takes effect on next sleep cycle)
     if (captureActive) {
         try {
-            await fetch('/api/capture/interval',{
-                method:'POST',
-                headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({interval:totalSec})
+            await fetch('/api/capture/interval', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({interval: totalSec})
             });
-        } catch(e){ console.warn('[Capture] Could not update server interval:',e); }
+        } catch(e) { console.warn('[Capture] Could not update server interval:', e); }
     }
     await showModal('Interval Diperbarui',`Interval diubah menjadi ${value} ${unitLabel}.`,'success',['ok']);
 }
@@ -1105,33 +1183,34 @@ async function setCaptureInterval() {
 // ====================================
 // INITIALIZE APP
 // ====================================
-document.addEventListener('DOMContentLoaded', async ()=>{
+document.addEventListener('DOMContentLoaded', async () => {
     loadChartDataFromStorage();
     await loadDailyAggFromFirebase();
     initChart();
 
-    document.getElementById('parameterSelect')?.addEventListener('change',changeParameter);
-    document.querySelectorAll('.metric-card-compact').forEach(card=>{
+    document.getElementById('parameterSelect')?.addEventListener('change', changeParameter);
+    document.querySelectorAll('.metric-card-compact').forEach(card => {
         if (!card.dataset.param) return;
-        card.addEventListener('click',()=>_switchParameter(card.dataset.param));
-        card.classList.toggle('card-active',card.dataset.param===selectedParameter);
+        card.addEventListener('click', () => _switchParameter(card.dataset.param));
+        card.classList.toggle('card-active', card.dataset.param === selectedParameter);
     });
 
-    initRealtimeListener();
-    initHistoryListener();
+    // Load devices — will also attach realtime & history listeners for first device
+    await loadDevices();
+    setInterval(loadDevices, 30000); // refresh device list every 30s
+
     updateConnectionStatus(false);
     startConnectionMonitoring();
 
-    // ── Sync UI with server capture state on load ──
     await syncCaptureStatus();
-    _startStatusPolling();   // keep UI in sync every 4 s
+    _startStatusPolling();
 
-    document.getElementById('sessionNameInput')?.addEventListener('keydown',e=>{
-        if (e.key==='Enter') { _renamingSessionId?confirmRenameSession():confirmStartCapture(); }
+    document.getElementById('sessionNameInput')?.addEventListener('keydown', e => {
+        if (e.key==='Enter') { _renamingSessionId ? confirmRenameSession() : confirmStartCapture(); }
     });
 });
 
-window.addEventListener('beforeunload',()=>{
+window.addEventListener('beforeunload', () => {
     saveChartDataToStorage();
     if (_lastDayStr) _flushDailyAgg(_lastDayStr);
 });
