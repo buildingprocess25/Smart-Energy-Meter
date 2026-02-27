@@ -11,78 +11,74 @@ const database = firebase.database();
 // ====================================
 // APP STATE
 // ====================================
-let realtimeData        = null;
-let historyData         = [];
-let isConnected         = false;
-let lastDataTimestamp   = 0;
+let realtimeData      = null;
+let historyData       = [];
+let isConnected       = false;
+let lastDataTimestamp = 0;
 let connectionCheckInterval = null;
+let _initialLoad      = true;
 
-let _staleFingerprint   = null;
+// ====================================
+// SESSION STATE
+// ====================================
+let currentSessionId  = null;
+let sessionsData      = {};
+let _renamingSessionId = null;
 
 // ====================================
 // CHART STATE
 // ====================================
-let realtimeChart = null;
-let chartData = {
-    labels:      [],
-    timestamps:  [],
-    voltage:     [],
-    current:     [],
-    power:       [],
-    frequency:   [],
-    apparent:    [],
-    reactive:    [],
-    energy:      [],
-    powerFactor: []
-};
+let realtimeChart    = null;
+let selectedParameter = 'voltage';
+let timeFilter       = 'all';
+let _saveCounter     = 0;
+let _userIsZoomed    = false;
 
-const MAX_DATA_POINTS     = 300;
+const MAX_DATA_POINTS    = 300;
 const SAVE_EVERY_N_POINTS = 60;
 
-let selectedParameter = 'voltage';
-let timeFilter        = 'all';
+const CHART_KEYS = [
+    'labels','timestamps','voltage','current','power',
+    'frequency','apparent','reactive','energy','powerFactor'
+];
 
-// ====================================
-// CAPTURE STATE
-// ====================================
-let captureActive     = false;
-let captureCount      = 0;
-let captureInterval   = 3000;
-let captureIntervalId = null;
-let _captureWasActive = false;
-
-// ====================================
-// SETTINGS STATE
-// ====================================
-let thresholds = {
-    voltageMax:     240,
-    voltageMin:     200,
-    currentMax:     20,
-    powerMax:       4400,
-    powerFactorMin: 0.85,
-    energyLimit:    1000
+let chartData = {
+    labels:[], timestamps:[],
+    voltage:[], current:[], power:[], frequency:[],
+    apparent:[], reactive:[], energy:[], powerFactor:[]
 };
 
-let preferences = {
-    decimalPlaces: 2,
-    updateRate:    2000,
-    soundAlerts:   false,
-    visualAlerts:  true
-};
-
-let autoExportEnabled  = false;
-let autoExportInterval = '0';
+// ====================================
+// FIREBASE FIELD MAPPING
+// ====================================
+function normalizeFirebaseData(raw) {
+    if (!raw) return null;
+    return {
+        Voltage:        parseFloat(raw.V1)     || 0,
+        Current:        parseFloat(raw.A1)     || 0,
+        Power:         (parseFloat(raw.P_SUM)  || 0) * 1000,
+        Frequency:      parseFloat(raw.FREQ)   || 0,
+        Apparent:       parseFloat(raw.S_SUM)  || 0,
+        Reactive:       parseFloat(raw.Q_SUM)  || 0,
+        Energy:         parseFloat(raw.WH)     || 0,
+        PowerFactor:    parseFloat(raw.PF_SUM) || 0,
+        Phase1:         parseFloat(raw.PHASE1) || 0,
+        EnergyApparent: parseFloat(raw.SH)     || 0,
+        EnergyReactive: parseFloat(raw.QH)     || 0,
+        V1:  parseFloat(raw.V1)  || 0,
+        A1:  parseFloat(raw.A1)  || 0,
+        P1:  (parseFloat(raw.P1) || 0) * 1000,
+        S1:  parseFloat(raw.S1)  || 0,
+        Q1:  parseFloat(raw.Q1)  || 0,
+        PF1: parseFloat(raw.PF1) || 0,
+        DeviceTimestamp: raw.Timestamp || ''
+    };
+}
 
 // ====================================
-// CHART PERSISTENCE — localStorage
+// CHART PERSISTENCE
 // ====================================
 const CHART_STORAGE_KEY = 'sem_chartdata_v1';
-const CHART_KEYS = [
-    'labels', 'timestamps', 'voltage', 'current', 'power',
-    'frequency', 'apparent', 'reactive', 'energy', 'powerFactor'
-];
-let _saveCounter  = 0;
-let _userIsZoomed = false;
 
 function loadChartDataFromStorage() {
     try {
@@ -91,21 +87,11 @@ function loadChartDataFromStorage() {
         const saved = JSON.parse(raw);
         if (!CHART_KEYS.every(k => Array.isArray(saved[k]))) return;
         CHART_KEYS.forEach(k => { chartData[k] = saved[k]; });
-
-        const cutoff      = Date.now() - 24 * 60 * 60 * 1000;
-        const firstRecent = chartData.timestamps.findIndex(t => t >= cutoff);
-        if (firstRecent > 0) {
-            CHART_KEYS.forEach(k => { chartData[k] = chartData[k].slice(firstRecent); });
-            console.log(`[ChartStorage] Pruned ${firstRecent} stale points.`);
-        } else if (firstRecent === -1) {
-            CHART_KEYS.forEach(k => { chartData[k] = []; });
-            console.log('[ChartStorage] Semua data kadaluarsa, chart di-reset.');
-            return;
-        }
-        console.log(`[ChartStorage] Loaded ${chartData.labels.length} points.`);
-    } catch (e) {
-        console.warn('[ChartStorage] Gagal memuat:', e);
-    }
+        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+        const first  = chartData.timestamps.findIndex(t => t >= cutoff);
+        if (first === -1) { CHART_KEYS.forEach(k => { chartData[k] = []; }); return; }
+        if (first > 0)    CHART_KEYS.forEach(k => { chartData[k] = chartData[k].slice(first); });
+    } catch (e) { console.warn('[ChartStorage] Load failed:', e); }
 }
 
 function saveChartDataToStorage() {
@@ -114,7 +100,6 @@ function saveChartDataToStorage() {
         CHART_KEYS.forEach(k => { payload[k] = chartData[k]; });
         localStorage.setItem(CHART_STORAGE_KEY, JSON.stringify(payload));
     } catch (e) {
-        console.warn('[ChartStorage] Storage penuh, memangkas data lama...');
         CHART_KEYS.forEach(k => { chartData[k] = chartData[k].slice(-100); });
         try {
             const payload = {};
@@ -125,218 +110,176 @@ function saveChartDataToStorage() {
 }
 
 function maybeSaveChartData() {
-    _saveCounter++;
-    if (_saveCounter >= SAVE_EVERY_N_POINTS) {
-        _saveCounter = 0;
-        saveChartDataToStorage();
-    }
-}
-
-function clearChartDataFromStorage() {
-    _saveCounter = 0;
-    localStorage.removeItem(CHART_STORAGE_KEY);
+    if (++_saveCounter >= SAVE_EVERY_N_POINTS) { _saveCounter = 0; saveChartDataToStorage(); }
 }
 
 // ====================================
-// DAILY AGGREGATION — Firebase
+// DAILY AGGREGATION
 // ====================================
 const DAILY_AGG_REF  = 'alat1/DailyAgg';
 const DAILY_AGG_KEYS = ['voltage','current','power','frequency','apparent','reactive','energy','powerFactor'];
-
-let _dailyAgg    = {};
-let _dailySums   = {};
-let _dailyCounts = {};
-let _lastDayStr  = '';
+let _dailyAgg   = {}, _dailySums = {}, _dailyCounts = {}, _lastDayStr = '';
 
 function _todayStr() {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
-
 function _cutoffStr() {
-    const d = new Date();
-    d.setDate(d.getDate() - 7);
-    return d.toISOString().slice(0, 10);
+    const d = new Date(); d.setDate(d.getDate()-7);
+    return d.toISOString().slice(0,10);
 }
 
 function loadDailyAggFromFirebase() {
-    return new Promise((resolve) => {
-        database.ref(DAILY_AGG_REF).once('value', (snap) => {
+    return new Promise(resolve => {
+        database.ref(DAILY_AGG_REF).once('value', snap => {
             if (!snap.exists()) { resolve(); return; }
-
-            const raw    = snap.val() || {};
-            const cutoff = _cutoffStr();
-            const removes = [];
-
+            const raw=snap.val()||{}, cutoff=_cutoffStr();
             Object.keys(raw).forEach(day => {
-                if (day < cutoff) {
-                    removes.push(database.ref(`${DAILY_AGG_REF}/${day}`).remove());
-                    console.log(`[DailyAgg] Pruned: ${day}`);
-                } else {
-                    _dailyAgg[day] = raw[day];
-                }
+                if (day<cutoff) database.ref(`${DAILY_AGG_REF}/${day}`).remove();
+                else _dailyAgg[day]=raw[day];
             });
-
-            if (removes.length) {
-                Promise.all(removes).catch(e => console.warn('[DailyAgg] Prune error:', e));
-            }
-
-            console.log(`[DailyAgg] Loaded ${Object.keys(_dailyAgg).length} days.`);
             resolve();
-        }, () => resolve());
+        }, ()=>resolve());
     });
 }
 
 function _accumulateDailyPoint(data) {
-    const today = _todayStr();
-
-    if (_lastDayStr && _lastDayStr !== today) {
-        _flushDailyAgg(_lastDayStr);
-        _pruneOldDailyAgg();
-    }
-    _lastDayStr = today;
-
+    const today=_todayStr();
+    if (_lastDayStr && _lastDayStr!==today) { _flushDailyAgg(_lastDayStr); _pruneOldDailyAgg(); }
+    _lastDayStr=today;
     if (!_dailySums[today]) {
-        _dailySums[today]   = {};
-        _dailyCounts[today] = 0;
-        DAILY_AGG_KEYS.forEach(k => { _dailySums[today][k] = 0; });
+        _dailySums[today]={}; _dailyCounts[today]=0;
+        DAILY_AGG_KEYS.forEach(k=>{ _dailySums[today][k]=0; });
     }
-
-    DAILY_AGG_KEYS.forEach(k => {
-        const fk = k === 'powerFactor' ? 'PowerFactor' : k.charAt(0).toUpperCase() + k.slice(1);
-        _dailySums[today][k] += (data[fk] || 0);
-    });
+    const fm={
+        voltage:data.Voltage, current:data.Current, power:data.Power,
+        frequency:data.Frequency, apparent:data.Apparent, reactive:data.Reactive,
+        energy:data.Energy, powerFactor:data.PowerFactor
+    };
+    DAILY_AGG_KEYS.forEach(k=>{ _dailySums[today][k]+=(fm[k]||0); });
     _dailyCounts[today]++;
-
-    if (_dailyCounts[today] % 300 === 0) {
-        _flushDailyAgg(today);
-    }
+    if (_dailyCounts[today]%300===0) _flushDailyAgg(today);
 }
 
 function _flushDailyAgg(dayStr) {
-    const count = _dailyCounts[dayStr];
-    if (!count || count === 0) return;
-
-    const avg = {};
-    DAILY_AGG_KEYS.forEach(k => {
-        avg[k] = parseFloat((_dailySums[dayStr][k] / count).toFixed(4));
-    });
-    _dailyAgg[dayStr] = avg;
-
-    database.ref(`${DAILY_AGG_REF}/${dayStr}`).set(avg)
-        .then(() => console.log(`[DailyAgg] Saved ${dayStr} (${count} samples)`))
-        .catch(err => console.warn('[DailyAgg] Gagal simpan:', err));
+    const count=_dailyCounts[dayStr];
+    if (!count) return;
+    const avg={};
+    DAILY_AGG_KEYS.forEach(k=>{ avg[k]=parseFloat((_dailySums[dayStr][k]/count).toFixed(4)); });
+    _dailyAgg[dayStr]=avg;
+    database.ref(`${DAILY_AGG_REF}/${dayStr}`).set(avg).catch(e=>console.warn('[DailyAgg]',e));
 }
 
 function _pruneOldDailyAgg() {
-    const cutoff = _cutoffStr();
-    Object.keys(_dailyAgg).forEach(day => {
-        if (day < cutoff) {
-            database.ref(`${DAILY_AGG_REF}/${day}`).remove()
-                .then(() => console.log(`[DailyAgg] Deleted: ${day}`))
-                .catch(e => console.warn('[DailyAgg] Delete error:', e));
-            delete _dailyAgg[day];
-            delete _dailySums[day];
-            delete _dailyCounts[day];
+    const cutoff=_cutoffStr();
+    Object.keys(_dailyAgg).forEach(day=>{
+        if (day<cutoff) {
+            database.ref(`${DAILY_AGG_REF}/${day}`).remove();
+            delete _dailyAgg[day]; delete _dailySums[day]; delete _dailyCounts[day];
         }
     });
 }
 
 function getDailyChartData(param) {
-    const labels = [], values = [];
-    for (let i = 6; i >= 0; i--) {
-        const d      = new Date();
-        d.setDate(d.getDate() - i);
-        const dayStr = d.toISOString().slice(0, 10);
-        const label  = `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
+    const labels=[], values=[];
+    for (let i=6;i>=0;i--) {
+        const d=new Date(); d.setDate(d.getDate()-i);
+        const dayStr=d.toISOString().slice(0,10);
+        const label=`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
         labels.push(label);
-
-        if (_dailyAgg[dayStr]?.[param] !== undefined) {
+        if (_dailyAgg[dayStr]?.[param]!==undefined)
             values.push(_dailyAgg[dayStr][param]);
-        } else if (_dailySums[dayStr] && _dailyCounts[dayStr] > 0) {
-            values.push(parseFloat((_dailySums[dayStr][param] / _dailyCounts[dayStr]).toFixed(4)));
-        } else {
+        else if (_dailySums[dayStr]&&_dailyCounts[dayStr]>0)
+            values.push(parseFloat((_dailySums[dayStr][param]/_dailyCounts[dayStr]).toFixed(4)));
+        else
             values.push(null);
-        }
     }
-    return { labels, values };
+    return {labels,values};
 }
 
 // ====================================
 // MODAL
 // ====================================
-function showModal(title, message, type = 'info', buttons = ['ok']) {
-    return new Promise((resolve) => {
-        const modal        = document.getElementById('customModal');
-        const modalTitle   = document.getElementById('modalTitle');
-        const modalMessage = document.getElementById('modalMessage');
-        const modalIcon    = document.getElementById('modalIcon');
-        const modalButtons = document.getElementById('modalButtons');
-
-        modalTitle.textContent   = title;
-        modalMessage.textContent = message;
-        modalIcon.className      = 'modal-icon ' + type;
-
-        const icons = {
-            success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>',
-            warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
-            error:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
-            info:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>'
+function showModal(title, message, type='info', buttons=['ok']) {
+    return new Promise(resolve => {
+        const modal     =document.getElementById('customModal');
+        const modalTitle=document.getElementById('modalTitle');
+        const modalMsg  =document.getElementById('modalMessage');
+        const modalIcon =document.getElementById('modalIcon');
+        const modalBtns =document.getElementById('modalButtons');
+        modalTitle.textContent=title;
+        modalMsg.textContent=message;
+        modalIcon.className='modal-icon '+type;
+        const icons={
+            success:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+            warning:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
+            error:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
+            info:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>'
         };
-        modalIcon.innerHTML = icons[type] || icons.info;
-
-        modalButtons.innerHTML = '';
+        modalIcon.innerHTML=icons[type]||icons.info;
+        modalBtns.innerHTML='';
         if (buttons.includes('confirm')) {
-            const cancelBtn = document.createElement('button');
-            cancelBtn.className   = 'modal-btn modal-btn-secondary';
-            cancelBtn.textContent = 'BATAL';
-            cancelBtn.onclick     = () => { closeModal(); resolve(false); };
-            modalButtons.appendChild(cancelBtn);
-
-            const confirmBtn = document.createElement('button');
-            confirmBtn.className   = 'modal-btn modal-btn-primary';
-            confirmBtn.textContent = 'YA, LANJUTKAN';
-            confirmBtn.onclick     = () => { closeModal(); resolve(true); };
-            modalButtons.appendChild(confirmBtn);
+            const cancelBtn=document.createElement('button');
+            cancelBtn.className='modal-btn modal-btn-secondary';
+            cancelBtn.textContent='BATAL';
+            cancelBtn.onclick=()=>{ closeModal(); resolve(false); };
+            modalBtns.appendChild(cancelBtn);
+            const confirmBtn=document.createElement('button');
+            confirmBtn.className='modal-btn modal-btn-primary';
+            confirmBtn.textContent='YA, LANJUTKAN';
+            confirmBtn.onclick=()=>{ closeModal(); resolve(true); };
+            modalBtns.appendChild(confirmBtn);
         } else {
-            const okBtn = document.createElement('button');
-            okBtn.className   = 'modal-btn modal-btn-primary';
-            okBtn.textContent = 'OK';
-            okBtn.onclick     = () => { closeModal(); resolve(true); };
-            modalButtons.appendChild(okBtn);
+            const okBtn=document.createElement('button');
+            okBtn.className='modal-btn modal-btn-primary';
+            okBtn.textContent='OK';
+            okBtn.onclick=()=>{ closeModal(); resolve(true); };
+            modalBtns.appendChild(okBtn);
         }
-
         modal.classList.add('active');
-        document.body.style.overflow = 'hidden';
+        document.body.style.overflow='hidden';
     });
 }
 
 function closeModal() {
     document.getElementById('customModal').classList.remove('active');
-    document.body.style.overflow = '';
+    document.body.style.overflow='';
 }
 
-document.addEventListener('click',   e => { if (e.target === document.getElementById('customModal')) closeModal(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+document.addEventListener('click', e=>{ if (e.target===document.getElementById('customModal')) closeModal(); });
+document.addEventListener('keydown', e=>{ if (e.key==='Escape') closeModal(); });
 
 // ====================================
-// ZOOM
+// DISPLAY CARDS
 // ====================================
-function resetZoom() {
-    if (realtimeChart) {
-        realtimeChart.resetZoom();
-        _userIsZoomed = false;
-    }
+function updateDisplayCards(data) {
+    const fmt=(val,dec)=>(val!==undefined&&val!==null&&!isNaN(val))?parseFloat(val).toFixed(dec):'---';
+    document.getElementById('voltage').textContent    =fmt(data.Voltage,1);
+    document.getElementById('current').textContent    =fmt(data.Current,2);
+    document.getElementById('power').textContent      =fmt(data.Power,1);
+    document.getElementById('frequency').textContent  =fmt(data.Frequency,1);
+    document.getElementById('apparent').textContent   =fmt(data.Apparent,3);
+    document.getElementById('reactive').textContent   =fmt(data.Reactive,3);
+    document.getElementById('energy').textContent     =fmt(data.Energy,3);
+    document.getElementById('powerFactor').textContent=fmt(data.PowerFactor,3);
+    const el=document.getElementById('lastUpdate');
+    if (el) el.textContent='Last update: '+new Date().toLocaleTimeString('id-ID');
+}
+
+function updateDisplayCardsBlank() {
+    ['voltage','current','power','frequency','apparent','reactive','energy','powerFactor']
+        .forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent='---'; });
+    const el=document.getElementById('lastUpdate');
+    if (el) el.textContent='--- Device offline ---';
 }
 
 // ====================================
 // TIME FILTER
 // ====================================
 function setTimeFilter(filter) {
-    timeFilter    = filter;
-    _userIsZoomed = false;
-    document.querySelectorAll('.time-filter-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.filter === filter);
+    timeFilter=filter; _userIsZoomed=false;
+    document.querySelectorAll('.time-filter-btn').forEach(btn=>{
+        btn.classList.toggle('active',btn.dataset.filter===filter);
     });
     refreshChartWithFilter();
 }
@@ -345,928 +288,850 @@ function setTimeFilter(filter) {
 // AGGREGATION
 // ====================================
 function getFilterConfig() {
-    const configs = {
-        minute: { buckets: 60, bucketMs: 60_000,        windowMs: 60 * 60_000,       fmt: 'HH:MM' },
-        hour:   { buckets: 24, bucketMs: 60 * 60_000,   windowMs: 24 * 60 * 60_000,  fmt: 'HH:00' },
-        '6h':   { buckets: 12, bucketMs: 30 * 60_000,   windowMs: 6  * 60 * 60_000,  fmt: 'HH:MM' },
-        day:    null
+    const configs={
+        minute:{buckets:60,bucketMs:60_000,      windowMs:60*60_000,      fmt:'HH:MM'},
+        hour:  {buckets:24,bucketMs:60*60_000,   windowMs:24*60*60_000,   fmt:'HH:00'},
+        '6h':  {buckets:12,bucketMs:30*60_000,   windowMs:6*60*60_000,    fmt:'HH:MM'}
     };
-    return configs[timeFilter] || null;
+    return configs[timeFilter]||null;
 }
 
 function getAggregatedChartData() {
-    const raw = chartData[selectedParameter];
-    const ts  = chartData.timestamps;
-
-    if (timeFilter === 'all') return { labels: chartData.labels, values: raw };
-    if (timeFilter === 'day') return getDailyChartData(selectedParameter);
-
-    const cfg = getFilterConfig();
-    if (!cfg) return { labels: chartData.labels, values: raw };
-
-    const now = Date.now();
-    const d   = new Date(now);
+    const raw=chartData[selectedParameter], ts=chartData.timestamps;
+    if (timeFilter==='all') return {labels:chartData.labels,values:raw};
+    if (timeFilter==='day') return getDailyChartData(selectedParameter);
+    const cfg=getFilterConfig();
+    if (!cfg) return {labels:chartData.labels,values:raw};
+    const now=Date.now(), d=new Date(now);
     let alignedNow;
-    if (timeFilter === 'minute') {
-        alignedNow = new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes() + 1, 0, 0).getTime();
-    } else {
-        alignedNow = new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours() + 1, 0, 0, 0).getTime();
+    if (timeFilter==='minute')
+        alignedNow=new Date(d.getFullYear(),d.getMonth(),d.getDate(),d.getHours(),d.getMinutes()+1,0,0).getTime();
+    else
+        alignedNow=new Date(d.getFullYear(),d.getMonth(),d.getDate(),d.getHours()+1,0,0,0).getTime();
+    const windowStart=alignedNow-cfg.windowMs;
+    const sums=new Array(cfg.buckets).fill(0), counts=new Array(cfg.buckets).fill(0);
+    for (let i=0;i<ts.length;i++) {
+        const t=ts[i];
+        if (t<windowStart||t>now) continue;
+        const idx=Math.floor((t-windowStart)/cfg.bucketMs);
+        if (idx<0||idx>=cfg.buckets) continue;
+        sums[idx]+=raw[i]; counts[idx]++;
     }
-    const windowStart = alignedNow - cfg.windowMs;
-
-    const sums   = new Array(cfg.buckets).fill(0);
-    const counts = new Array(cfg.buckets).fill(0);
-
-    for (let i = 0; i < ts.length; i++) {
-        const t = ts[i];
-        if (t < windowStart || t > now) continue;
-        const idx = Math.floor((t - windowStart) / cfg.bucketMs);
-        if (idx < 0 || idx >= cfg.buckets) continue;
-        sums[idx]   += raw[i];
-        counts[idx] += 1;
+    const labels=[], values=[];
+    for (let i=0;i<cfg.buckets;i++) {
+        labels.push(formatBucketLabel(new Date(windowStart+i*cfg.bucketMs),cfg.fmt));
+        values.push(counts[i]>0?parseFloat((sums[i]/counts[i]).toFixed(4)):null);
     }
-
-    const labels = [], values = [];
-    for (let i = 0; i < cfg.buckets; i++) {
-        const labelTime = new Date(windowStart + i * cfg.bucketMs);
-        labels.push(formatBucketLabel(labelTime, cfg.fmt));
-        values.push(counts[i] > 0 ? parseFloat((sums[i] / counts[i]).toFixed(4)) : null);
-    }
-
-    return { labels, values };
+    return {labels,values};
 }
 
-function formatBucketLabel(d, fmt) {
-    const pad = v => String(v).padStart(2, '0');
-    switch (fmt) {
-        case 'DD/MM':  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
-        case 'HH:00':  return `${pad(d.getHours())}:00`;
-        case 'HH:MM':  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        default:       return d.toLocaleTimeString('id-ID');
-    }
+function formatBucketLabel(d,fmt) {
+    const pad=v=>String(v).padStart(2,'0');
+    if (fmt==='DD/MM') return `${pad(d.getDate())}/${pad(d.getMonth()+1)}`;
+    if (fmt==='HH:00') return `${pad(d.getHours())}:00`;
+    if (fmt==='HH:MM') return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    return d.toLocaleTimeString('id-ID');
 }
 
 function refreshChartWithFilter() {
-    const canvas = document.getElementById('realtimeChart');
+    const canvas=document.getElementById('realtimeChart');
     if (!canvas) return;
-    const wrap = canvas.parentElement;
-    wrap.style.transition = 'opacity 0.18s ease';
-    wrap.style.opacity    = '0';
-    setTimeout(() => {
-        if (realtimeChart) { realtimeChart.destroy(); realtimeChart = null; }
-        initChart();
-        wrap.style.opacity = '1';
-    }, 180);
-}
-
-function updateFilterInfo(_values) {
-    const el = document.getElementById('filterInfo');
-    if (el) el.textContent = '';
+    const wrap=canvas.parentElement;
+    wrap.style.transition='opacity 0.18s ease'; wrap.style.opacity='0';
+    setTimeout(()=>{
+        if (realtimeChart) { realtimeChart.destroy(); realtimeChart=null; }
+        initChart(); wrap.style.opacity='1';
+    },180);
 }
 
 // ====================================
 // CHART
 // ====================================
-function getYBounds(values, param) {
-    const padMap = {
-        voltage:     10,
-        current:     1,
-        power:       50,
-        frequency:   1,
-        apparent:    0.05,
-        reactive:    0.05,
-        energy:      0.1,
-        powerFactor: 0.05
+function getYBounds(values,param) {
+    const padMap={
+        voltage:10,current:1,power:50,frequency:1,
+        apparent:0.05,reactive:0.05,energy:0.1,powerFactor:0.05
     };
-    const pad   = padMap[param] ?? 5;
-    const clean = (values || []).filter(v => v !== null && v !== undefined && isFinite(v));
-    if (clean.length === 0) return { yMin: undefined, yMax: undefined };
-
-    const dataMin   = Math.min(...clean);
-    const dataMax   = Math.max(...clean);
-    const dataRange = dataMax - dataMin;
-    const actualPad = dataRange < pad * 2 ? pad : dataRange * 0.15;
-
-    return {
-        yMin: parseFloat((dataMin - actualPad).toFixed(4)),
-        yMax: parseFloat((dataMax + actualPad).toFixed(4))
-    };
+    const pad=padMap[param]??5;
+    const clean=(values||[]).filter(v=>v!==null&&v!==undefined&&isFinite(v));
+    if (!clean.length) return {yMin:undefined,yMax:undefined};
+    const dataMin=Math.min(...clean), dataMax=Math.max(...clean);
+    const actualPad=(dataMax-dataMin)<pad*2?pad:(dataMax-dataMin)*0.15;
+    return {yMin:parseFloat((dataMin-actualPad).toFixed(4)),yMax:parseFloat((dataMax+actualPad).toFixed(4))};
 }
 
 function initChart() {
-    const ctx = document.getElementById('realtimeChart');
+    const ctx=document.getElementById('realtimeChart');
     if (!ctx) return;
-
-    const parameterInfo = {
-        voltage:     { label: 'Voltage',       unit: 'V',    color: '#FFA500', borderColor: '#FF8C00' },
-        current:     { label: 'Current',        unit: 'A',    color: '#0066CC', borderColor: '#0052A3' },
-        power:       { label: 'Power',          unit: 'W',    color: '#00A651', borderColor: '#008040' },
-        frequency:   { label: 'Frequency',      unit: 'Hz',   color: '#6B46C1', borderColor: '#5A3AA0' },
-        apparent:    { label: 'Apparent Power', unit: 'kVA',  color: '#FFA500', borderColor: '#FF8C00' },
-        reactive:    { label: 'Reactive Power', unit: 'kVAR', color: '#0066CC', borderColor: '#0052A3' },
-        energy:      { label: 'Energy',         unit: 'kWh',  color: '#00A651', borderColor: '#008040' },
-        powerFactor: { label: 'Power Factor',   unit: '',     color: '#6B46C1', borderColor: '#5A3AA0' }
+    const paramInfo={
+        voltage:    {label:'Voltage',       unit:'V',   color:'#FFA500',borderColor:'#FF8C00'},
+        current:    {label:'Current',       unit:'A',   color:'#0066CC',borderColor:'#0052A3'},
+        power:      {label:'Power',         unit:'W',   color:'#00A651',borderColor:'#008040'},
+        frequency:  {label:'Frequency',     unit:'Hz',  color:'#6B46C1',borderColor:'#5A3AA0'},
+        apparent:   {label:'Apparent Power',unit:'kVA', color:'#FFA500',borderColor:'#FF8C00'},
+        reactive:   {label:'Reactive Power',unit:'kVAR',color:'#0066CC',borderColor:'#0052A3'},
+        energy:     {label:'Energy',        unit:'kWh', color:'#00A651',borderColor:'#008040'},
+        powerFactor:{label:'Power Factor',  unit:'',    color:'#6B46C1',borderColor:'#5A3AA0'}
     };
-
-    const info     = parameterInfo[selectedParameter];
-    const isBar    = (timeFilter === 'day' || timeFilter === '6h' || timeFilter === 'hour');
-    const isAgg    = (timeFilter !== 'all');
-    const isMinute = (timeFilter === 'minute');
-
-    const { labels, values } = getAggregatedChartData();
-
-    const xTitles = {
-        all:    'Waktu',
-        minute: '60 Menit Terakhir',
-        hour:   '24 Jam Terakhir',
-        '6h':   '6 Jam Terakhir',
-        day:    '7 Hari Terakhir'
-    };
-
-    const gradientFill = (() => {
-        const c2d = ctx.getContext('2d');
-        const g   = c2d.createLinearGradient(0, 0, 0, ctx.clientHeight || 300);
-        const top = isMinute ? '88' : '55';
-        const bot = isMinute ? '10' : '05';
-        g.addColorStop(0, info.color + top);
-        g.addColorStop(1, info.color + bot);
+    const info    =paramInfo[selectedParameter];
+    const isBar   =(timeFilter==='day'||timeFilter==='6h'||timeFilter==='hour');
+    const isAgg   =(timeFilter!=='all');
+    const isMinute=(timeFilter==='minute');
+    const {labels,values}=getAggregatedChartData();
+    const gradientFill=(()=>{
+        const c2d=ctx.getContext('2d');
+        const g=c2d.createLinearGradient(0,0,0,ctx.clientHeight||300);
+        g.addColorStop(0,info.color+(isMinute?'88':'55'));
+        g.addColorStop(1,info.color+(isMinute?'10':'05'));
         return g;
     })();
-
-    realtimeChart = new Chart(ctx, {
-        type: isBar ? 'bar' : 'line',
-        data: {
+    const xTitles={all:'Waktu',minute:'60 Menit Terakhir',hour:'24 Jam Terakhir','6h':'6 Jam Terakhir',day:'7 Hari Terakhir'};
+    const {yMin,yMax}=getYBounds(values,selectedParameter);
+    realtimeChart=new Chart(ctx,{
+        type:isBar?'bar':'line',
+        data:{
             labels,
-            datasets: [{
-                label:                  info.unit ? `${info.label} (${info.unit})` : info.label,
-                data:                   values,
-                borderColor:            info.borderColor,
-                backgroundColor:        isBar ? info.color + 'BB' : gradientFill,
-                borderWidth:            isBar ? 1.5 : (isMinute ? 2.5 : 2),
-                tension:                isMinute ? 0.5 : 0.4,
-                cubicInterpolationMode: 'monotone',
-                spanGaps:               isMinute,
-                fill:                   !isBar,
-                pointRadius:            isBar ? 0 : (isMinute ? 0 : (isAgg ? 4 : (chartData.labels.length > 150 ? 0 : 2))),
-                pointHoverRadius:       isBar ? 0 : (isMinute ? 5 : 6),
-                pointBackgroundColor:   info.borderColor,
-                pointBorderColor:       '#fff',
-                pointBorderWidth:       1.5,
-                borderRadius:           isBar ? 5 : 0,
-                borderSkipped:          false
+            datasets:[{
+                label:info.unit?`${info.label} (${info.unit})`:info.label,
+                data:values, borderColor:info.borderColor,
+                backgroundColor:isBar?info.color+'BB':gradientFill,
+                borderWidth:isBar?1.5:(isMinute?2.5:2),
+                tension:isMinute?0.5:0.4, cubicInterpolationMode:'monotone',
+                spanGaps:isMinute, fill:!isBar,
+                pointRadius:isBar?0:(isMinute?0:(isAgg?4:(chartData.labels.length>150?0:2))),
+                pointHoverRadius:isBar?0:(isMinute?5:6),
+                pointBackgroundColor:info.borderColor, pointBorderColor:'#fff',
+                pointBorderWidth:1.5, borderRadius:isBar?5:0, borderSkipped:false
             }]
         },
-        options: {
-            responsive:          true,
-            maintainAspectRatio: false,
-            interaction:         { intersect: false, mode: 'index' },
-            animation:           { duration: 300, easing: 'easeInOutQuart' },
-            transitions:         { active: { animation: { duration: 150 } } },
-            plugins: {
-                legend: {
-                    display: true, position: 'top',
-                    labels: {
-                        font:        { family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Arial', size: 11, weight: 700 },
-                        color:       '#666666',
-                        usePointStyle: true,
-                        pointStyle:  isBar ? 'rect' : 'circle',
-                        padding:     12
-                    }
-                },
-                tooltip: {
-                    backgroundColor: 'rgba(20,20,20,0.9)',
-                    titleFont:       { size: 12, weight: 700 },
-                    bodyFont:        { size: 11 },
-                    padding: 12, cornerRadius: 10, displayColors: false, caretSize: 6,
-                    callbacks: {
-                        title: items => ({ minute: ' ', hour: ' ', '6h': ' ', day: ' ', all: ' ' }[timeFilter] || ' ') + (items[0]?.label || ''),
-                        label: ctx => {
-                            const val = ctx.parsed.y;
-                            if (val === null || val === undefined) return '  Tidak ada data';
-                            const unit   = info.unit ? ` ${info.unit}` : '';
-                            const prefix = isAgg ? '  Rata-rata: ' : '  ';
-                            return `${prefix}${val.toFixed(3)}${unit}`;
+        options:{
+            responsive:true, maintainAspectRatio:false,
+            interaction:{intersect:false,mode:'index'},
+            animation:{duration:300,easing:'easeInOutQuart'},
+            transitions:{active:{animation:{duration:150}}},
+            plugins:{
+                legend:{display:true,position:'top',labels:{
+                    font:{family:'-apple-system, BlinkMacSystemFont, "Segoe UI", Arial',size:11,weight:700},
+                    color:'#666666',usePointStyle:true,pointStyle:isBar?'rect':'circle',padding:12
+                }},
+                tooltip:{
+                    backgroundColor:'rgba(20,20,20,0.9)',titleFont:{size:12,weight:700},
+                    bodyFont:{size:11},padding:12,cornerRadius:10,displayColors:false,caretSize:6,
+                    callbacks:{
+                        title:items=>' '+(items[0]?.label||''),
+                        label:ctx=>{
+                            const val=ctx.parsed.y;
+                            if (val===null||val===undefined) return '  Tidak ada data';
+                            return `${isAgg?'  Rata-rata: ':'  '}${val.toFixed(3)}${info.unit?' '+info.unit:''}`;
                         }
                     }
                 },
-                zoom: {
-                    zoom: {
-                        wheel:  { enabled: true, speed: 0.08 },
-                        pinch:  { enabled: true },
-                        mode:   'x',
-                        onZoom: () => { _userIsZoomed = true; }
-                    },
-                    pan: {
-                        enabled: true,
-                        mode:    'x',
-                        onPan:   () => { _userIsZoomed = true; }
-                    },
-                    limits: { x: { minRange: 2 } }
+                zoom:{
+                    zoom:{wheel:{enabled:true,speed:0.08},pinch:{enabled:true},mode:'x',onZoom:()=>{_userIsZoomed=true;}},
+                    pan: {enabled:true,mode:'x',onPan:()=>{_userIsZoomed=true;}},
+                    limits:{x:{minRange:2}}
                 }
             },
-            scales: {
-                x: {
-                    display: true,
-                    title: { display: true, text: xTitles[timeFilter] || 'Waktu', font: { size: 11, weight: 700 }, color: '#666666' },
-                    grid:  { color: 'rgba(0,0,0,0.04)', drawTicks: false },
-                    ticks: {
-                        maxRotation: isMinute ? 0 : 45,
-                        minRotation: 0,
-                        font:        { size: 9 },
-                        color:       '#999999',
-                        maxTicksLimit: isBar ? 7 : (isMinute ? 10 : (isAgg ? 12 : 15)),
-                        padding:     4
+            scales:{
+                x:{
+                    display:true,
+                    title:{display:true,text:xTitles[timeFilter]||'Waktu',font:{size:11,weight:700},color:'#666666'},
+                    grid:{color:'rgba(0,0,0,0.04)',drawTicks:false},
+                    ticks:{
+                        maxRotation:isMinute?0:45,minRotation:0,font:{size:9},color:'#999999',
+                        maxTicksLimit:isBar?7:(isMinute?10:(isAgg?12:15)),padding:4,autoSkip:true,autoSkipPadding:16
                     },
-                    offset: isBar
+                    offset:isBar
                 },
-                y: (() => {
-                    const { yMin, yMax } = getYBounds(values, selectedParameter);
-                    return {
-                        display: true,
-                        title: { display: true, text: info.unit ? `${info.label} (${info.unit})` : info.label, font: { size: 11, weight: 700 }, color: '#666666' },
-                        grid:  { color: 'rgba(0,0,0,0.05)', drawTicks: false },
-                        ticks: {
-                            font:     { size: 9 },
-                            color:    '#999999',
-                            padding:  6,
-                            callback: val => (val === null ? '' : val >= 1000 ? (val / 1000).toFixed(1) + 'k' : val)
-                        },
-                        min: yMin,
-                        max: yMax
-                    };
-                })()
+                y:{
+                    display:true,
+                    title:{display:true,text:info.unit?`${info.label} (${info.unit})`:info.label,font:{size:11,weight:700},color:'#666666'},
+                    grid:{color:'rgba(0,0,0,0.05)',drawTicks:false},
+                    ticks:{
+                        font:{size:9},color:'#999999',padding:6,
+                        callback:val=>val===null?'':val>=1000?(val/1000).toFixed(1)+'k':val
+                    },
+                    min:yMin, max:yMax
+                }
             }
         }
     });
-
-    updateFilterInfo(values);
 }
 
 function updateChart(data) {
     if (!realtimeChart) return;
-
-    const now       = new Date();
-    const timeLabel = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
+    const timeLabel=new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     chartData.labels.push(timeLabel);
     chartData.timestamps.push(Date.now());
-    chartData.voltage.push(data.Voltage       || 0);
-    chartData.current.push(data.Current       || 0);
-    chartData.power.push(data.Power           || 0);
-    chartData.frequency.push(data.Frequency   || 0);
-    chartData.apparent.push(data.Apparent     || 0);
-    chartData.reactive.push(data.Reactive     || 0);
-    chartData.energy.push(data.Energy         || 0);
-    chartData.powerFactor.push(data.PowerFactor || 0);
-
-    if (chartData.labels.length > MAX_DATA_POINTS) {
-        chartData.labels.shift();
-        chartData.timestamps.shift();
-        chartData.voltage.shift();
-        chartData.current.shift();
-        chartData.power.shift();
-        chartData.frequency.shift();
-        chartData.apparent.shift();
-        chartData.reactive.shift();
-        chartData.energy.shift();
-        chartData.powerFactor.shift();
-    }
-
+    chartData.voltage.push(data.Voltage      ||0);
+    chartData.current.push(data.Current      ||0);
+    chartData.power.push(data.Power          ||0);
+    chartData.frequency.push(data.Frequency  ||0);
+    chartData.apparent.push(data.Apparent    ||0);
+    chartData.reactive.push(data.Reactive    ||0);
+    chartData.energy.push(data.Energy        ||0);
+    chartData.powerFactor.push(data.PowerFactor||0);
+    if (chartData.labels.length>MAX_DATA_POINTS) CHART_KEYS.forEach(k=>{chartData[k].shift();});
     maybeSaveChartData();
     _accumulateDailyPoint(data);
-
-    const { labels, values } = getAggregatedChartData();
-    realtimeChart.data.labels              = labels;
-    realtimeChart.data.datasets[0].data    = values;
-
-    if (timeFilter === 'all') {
-        realtimeChart.data.datasets[0].pointRadius = chartData.labels.length > 150 ? 0 : 2;
+    const {labels,values}=getAggregatedChartData();
+    realtimeChart.data.labels=labels;
+    realtimeChart.data.datasets[0].data=values;
+    if (timeFilter==='all') {
+        realtimeChart.data.datasets[0].pointRadius=chartData.labels.length>150?0:2;
+        if (!_userIsZoomed) _scrollToLatest();
     }
-
     realtimeChart.update('none');
-
-    if (timeFilter === 'all' && !_userIsZoomed && realtimeChart.data.labels.length > 0) {
-        _scrollToLatest();
-    }
-
-    updateFilterInfo(values);
 }
 
 function _scrollToLatest() {
-    const total    = realtimeChart.data.labels.length;
-    const visible  = Math.min(60, total);
-    const minIndex = total - visible;
-    const maxIndex = total - 1;
-    try {
-        realtimeChart.zoomScale('x', { min: minIndex, max: maxIndex }, 'none');
-    } catch (_) { }
+    const total=realtimeChart.data.labels.length, visible=Math.min(60,total);
+    try { realtimeChart.zoomScale('x',{min:total-visible,max:total-1},'none'); } catch(_){}
 }
 
-function changeParameter() {
-    _switchParameter(document.getElementById('parameterSelect').value);
+function resetZoom() {
+    if (realtimeChart) { realtimeChart.resetZoom(); _userIsZoomed=false; }
 }
+
+function changeParameter() { _switchParameter(document.getElementById('parameterSelect').value); }
 
 function _switchParameter(param) {
-    selectedParameter = param;
-    _userIsZoomed     = false;
-
-    const sel = document.getElementById('parameterSelect');
-    if (sel) sel.value = param;
-
-    document.querySelectorAll('.metric-card-compact').forEach(card => {
-        card.classList.toggle('card-active', card.dataset.param === param);
+    selectedParameter=param; _userIsZoomed=false;
+    const sel=document.getElementById('parameterSelect');
+    if (sel) sel.value=param;
+    document.querySelectorAll('.metric-card-compact').forEach(card=>{
+        card.classList.toggle('card-active',card.dataset.param===param);
     });
-
-    const canvas = document.getElementById('realtimeChart');
-    const wrap   = canvas ? canvas.parentElement : null;
+    const canvas=document.getElementById('realtimeChart');
+    const wrap  =canvas?.parentElement;
     if (wrap) {
-        wrap.style.transition = 'opacity 0.18s ease';
-        wrap.style.opacity    = '0';
-        setTimeout(() => {
-            if (realtimeChart) realtimeChart.destroy();
-            initChart();
-            wrap.style.opacity = '1';
-        }, 180);
+        wrap.style.transition='opacity 0.18s ease'; wrap.style.opacity='0';
+        setTimeout(()=>{if(realtimeChart){realtimeChart.destroy();realtimeChart=null;}initChart();wrap.style.opacity='1';},180);
     } else {
-        if (realtimeChart) realtimeChart.destroy();
-        initChart();
+        if (realtimeChart){realtimeChart.destroy();realtimeChart=null;} initChart();
     }
-}
-
-function clearChartData() {
-    chartData = {
-        labels: [], timestamps: [],
-        voltage: [], current: [], power: [], frequency: [],
-        apparent: [], reactive: [], energy: [], powerFactor: []
-    };
-    clearChartDataFromStorage();
-    if (realtimeChart) {
-        realtimeChart.data.labels           = [];
-        realtimeChart.data.datasets[0].data = [];
-        realtimeChart.update();
-    }
-    updateFilterInfo([]);
 }
 
 // ====================================
 // TAB SWITCHING
 // ====================================
 function switchTab(tabName) {
-    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-
-    const map = { realtime: 'realtime', history: 'history', settings: 'settings' };
-    if (map[tabName]) {
-        document.getElementById(tabName + 'Tab').classList.add('active');
-        document.getElementById(tabName + 'Content').classList.add('active');
-    }
-    if (tabName === 'settings') loadSettings();
+    document.querySelectorAll('.tab-btn').forEach(btn=>btn.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+    document.getElementById(tabName+'Tab').classList.add('active');
+    document.getElementById(tabName+'Content').classList.add('active');
 }
 
 // ====================================
 // REALTIME LISTENER
 // ====================================
 function initRealtimeListener() {
-    database.ref('alat1/RealTime').on('value', (snapshot) => {
+    let _isFirstSnapshot=true;
+    database.ref('alat1/RealTime').on('value', snapshot=>{
         if (!snapshot.exists()) {
-            isConnected = false;
-            updateConnectionStatus(false);
-            return;
+            isConnected=false; realtimeData=null;
+            updateConnectionStatus(false); return;
         }
-
-        const data = snapshot.val();
-        realtimeData = data;
-
-        const fp = `${data.Voltage}|${data.Current}|${data.Power}|${data.Energy}|${data.Frequency}`;
-
-        if (_staleFingerprint === null) {
-            _staleFingerprint = fp;
-            updateDisplayCards(data);
-            return;
+        const raw =snapshot.val();
+        const data=normalizeFirebaseData(raw);
+        if (!data) {
+            isConnected=false; realtimeData=null;
+            updateConnectionStatus(false); return;
         }
-
-        if (fp === _staleFingerprint) {
-            return;
+        if (_isFirstSnapshot) { _isFirstSnapshot=false; return; }
+        const isZeroData=(data.Voltage===0&&data.Current===0&&data.Power===0);
+        if (isZeroData) {
+            isConnected=false; realtimeData=null;
+            updateConnectionStatus(false); return;
         }
-
-        _staleFingerprint = fp;
-        lastDataTimestamp = Date.now();
-        isConnected       = true;
-        updateRealtimeUI(data);
+        lastDataTimestamp=Date.now();
+        realtimeData=data;
+        isConnected=true;
+        updateDisplayCards(data);
+        updateChart(data);
         updateConnectionStatus(true);
-        checkThresholds(data);
-
-    }, () => { isConnected = false; updateConnectionStatus(false); });
-}
-
-function updateDisplayCards(data) {
-    document.getElementById('lastUpdate').textContent      = `Last update: ${new Date().toLocaleTimeString('id-ID')}`;
-    document.getElementById('voltage').textContent         = data.Voltage?.toFixed(2)     || '---';
-    document.getElementById('current').textContent         = data.Current?.toFixed(2)     || '---';
-    document.getElementById('power').textContent           = data.Power?.toFixed(2)       || '---';
-    document.getElementById('frequency').textContent       = data.Frequency?.toFixed(1)   || '---';
-    document.getElementById('apparent').textContent        = data.Apparent?.toFixed(3)    || '---';
-    document.getElementById('reactive').textContent        = data.Reactive?.toFixed(3)    || '---';
-    document.getElementById('energy').textContent          = data.Energy?.toFixed(3)      || '---';
-    document.getElementById('powerFactor').textContent     = data.PowerFactor?.toFixed(3) || '---';
-}
-
-function updateRealtimeUI(data) {
-    updateDisplayCards(data);
-    updateChart(data);
+    }, ()=>{
+        isConnected=false; realtimeData=null;
+        updateConnectionStatus(false);
+    });
 }
 
 // ====================================
 // CONNECTION STATUS
 // ====================================
-let _prevConnected = null;
-let _initialLoad   = true;  // true selama koneksi pertama saat reload/buka halaman
-
-async function updateConnectionStatus(connected) {
-    const statusDot  = document.getElementById('statusDot');
-    const statusText = document.getElementById('statusText');
-    const captureBtn = document.getElementById('captureBtn');
-
+function updateConnectionStatus(connected) {
+    const statusDot =document.getElementById('statusDot');
+    const statusText=document.getElementById('statusText');
     if (connected) {
-        statusDot.classList.add('online');
-        statusDot.classList.remove('offline');
-        statusText.textContent = 'ONLINE';
-        // Popup hanya saat koneksi pulih setelah benar-benar terputus mid-session (bukan saat reload)
-        if (_prevConnected === false && !_initialLoad) {
-            await showModal('Device Online', 'Koneksi dengan device berhasil!\nData realtime mulai diterima.', 'success', ['ok']);
-        }
-
-        // Tandai bahwa koneksi awal sudah selesai — popup berikutnya boleh tampil
-        _initialLoad = false;
-
-        // Auto-resume capture jika sebelumnya aktif lalu terputus
-        if (_captureWasActive && !captureActive) {
-            _captureWasActive = false;
-            await _autoResumeCapture();
-        }
-
+        statusDot.classList.add('online'); statusDot.classList.remove('offline');
+        statusText.textContent='ONLINE';
+        _initialLoad=false;
     } else {
-        statusDot.classList.add('offline');
-        statusDot.classList.remove('online');
-        statusText.textContent = 'OFFLINE';
-        // Popup offline hanya saat koneksi benar-benar terputus mid-session (bukan saat reload)
-        if (_prevConnected === true && !_initialLoad) {
-            if (captureActive) {
-                await showModal('Device Offline',
-                    'Koneksi dengan device terputus.\nData capture dihentikan otomatis dan akan dilanjutkan kembali saat device online.',
-                    'error', ['ok']);
-            } else {
-                await showModal('Device Offline',
-                    'Koneksi dengan device terputus.\nTidak ada data yang masuk saat ini.',
-                    'warning', ['ok']);
-            }
-        }
-
-        if (captureActive) {
-            _captureWasActive = true;
-            _autoStopCapture();
-        }
+        statusDot.classList.add('offline'); statusDot.classList.remove('online');
+        statusText.textContent='OFFLINE';
+        updateDisplayCardsBlank();
     }
-
-    _prevConnected = connected;
-}
-
-function _autoStopCapture() {
-    captureActive = false;
-    stopCaptureInterval();
-
-    const captureBtn = document.getElementById('captureBtn');
-    if (captureBtn) {
-        captureBtn.classList.remove('active');
-        captureBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> START CAPTURE`;
-    }
-    console.warn('[Capture] Auto-stopped: device offline.');
-}
-
-async function _autoResumeCapture() {
-    captureActive = true;
-    startCaptureInterval();
-
-    const captureBtn = document.getElementById('captureBtn');
-    if (captureBtn) {
-        captureBtn.classList.add('active');
-        captureBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg> STOP CAPTURE`;
-    }
-    await showModal('Capture Dilanjutkan',
-        `Device online kembali!\nData capture dilanjutkan otomatis.\n\nTotal data tersimpan: ${captureCount} records.`,
-        'success', ['ok']);
-    console.log('[Capture] Auto-resumed: device back online.');
 }
 
 function checkDataFreshness() {
-    const age   = Date.now() - lastDataTimestamp;
-    const fresh = lastDataTimestamp !== 0 && age <= 10000;
-    isConnected  = fresh;
-    updateConnectionStatus(fresh);
+    const age  =Date.now()-lastDataTimestamp;
+    const fresh=lastDataTimestamp!==0&&age<=3000;
+    if (isConnected&&!fresh) {
+        isConnected=false; realtimeData=null;
+        updateConnectionStatus(false);
+    }
 }
 
 function startConnectionMonitoring() {
     if (connectionCheckInterval) clearInterval(connectionCheckInterval);
-    connectionCheckInterval = setInterval(checkDataFreshness, 5000);
+    connectionCheckInterval=setInterval(checkDataFreshness,2000);
 }
 
 // ====================================
 // HISTORY LISTENER
 // ====================================
+let recordsBySession={};
+
 function initHistoryListener() {
-    database.ref('alat1/History').on('value', (snapshot) => {
-        if (snapshot.exists()) {
-            historyData = Object.values(snapshot.val());
-            historyData.sort((a, b) => parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp));
-            updateHistoryUI(historyData);
-        } else {
-            updateHistoryUI([]);
+    database.ref('alat1/History').on('value', snap=>{
+        historyData=[]; recordsBySession={}; sessionsData={};
+        if (snap.exists()) {
+            snap.forEach(sessionSnap=>{
+                const sid=sessionSnap.key;
+                recordsBySession[sid]=[];
+                sessionSnap.forEach(recordSnap=>{
+                    if (recordSnap.key==='_meta') { sessionsData[sid]=recordSnap.val(); return; }
+                    const record={...recordSnap.val(),sessionId:sid};
+                    historyData.push(record); recordsBySession[sid].push(record);
+                });
+            });
+        }
+        buildSessionUI();
+    });
+}
+
+function buildSessionUI() {
+    const tbody   =document.getElementById('historyTableBody');
+    const hc      =document.getElementById('historyCount');
+    const sessions=Object.values(sessionsData).sort((a,b)=>(b.startTimestamp||0)-(a.startTimestamp||0));
+    hc.textContent=`${sessions.length} sesi · ${historyData.length} total record`;
+    if (!sessions.length) {
+        tbody.innerHTML='<tr><td colspan="5" class="loading-cell">Belum ada data rekaman</td></tr>'; return;
+    }
+
+    // Remember which sessions are currently expanded so we can restore after re-render
+    const openSessions = new Set();
+    document.querySelectorAll('.session-detail-row').forEach(row => {
+        if (row.style.display !== 'none') {
+            openSessions.add(row.id.replace('detail_', ''));
         }
     });
+
+    tbody.innerHTML=sessions.map(session=>{
+        const records =(recordsBySession[session.id]||[]).sort((a,b)=>parseTimestamp(b.timestamp)-parseTimestamp(a.timestamp));
+        const count   =records.length;
+        const isActive=session.id===currentSessionId&&captureActive;
+
+        const innerRows=count?records.map(entry=>{
+            const isOffline =!!entry.offline;
+            const rowStyle  =isOffline?' style="opacity:0.5;font-style:italic;"':'';
+            const offlineTag=isOffline
+                ?' <span style="color:#9CA3AF;font-size:9px;font-weight:700;letter-spacing:0.3px">[offline]</span>'
+                :'';
+            const pfColor=isOffline?'#9CA3AF':(entry.PowerFactor>=0.95?'#00A651':'#ED1C24');
+            return `<tr class="inner-record-row"${rowStyle}>
+                <td>${entry.timestamp}${offlineTag}</td>
+                <td>${entry.Voltage?.toFixed(2)    ??'---'}</td>
+                <td>${entry.Current?.toFixed(2)    ??'---'}</td>
+                <td>${entry.Power?.toFixed(2)      ??'---'}</td>
+                <td>${entry.Energy?.toFixed(3)     ??'---'}</td>
+                <td style="color:${pfColor}">${entry.PowerFactor?.toFixed(3)??'---'}</td>
+            </tr>`;
+        }).join(''):`<tr><td colspan="6" class="loading-cell" style="padding:20px !important">Belum ada record dalam sesi ini</td></tr>`;
+
+        const innerTable=`<div class="session-inner-wrap"><table class="data-table inner-table">
+            <thead><tr><th>Timestamp</th><th>Voltage (V)</th><th>Current (A)</th><th>Power (W)</th><th>Energy (kWh)</th><th>PF</th></tr></thead>
+            <tbody>${innerRows}</tbody></table></div>`;
+
+        const endTimeCell=isActive
+            ?`<td><span style="color:#00A651;font-weight:700">Sedang berlangsung...</span></td>`
+            :`<td>${session.endTime||'---'}</td>`;
+
+        return `
+        <tr class="session-row${isActive?' session-active':''}" onclick="toggleSessionDetail('${session.id}')">
+            <td class="session-toggle-cell">
+                <span class="session-chevron" id="chevron_${session.id}">&#9658;</span>
+                <span class="session-id-badge" title="${session.id}">${session.id.replace('session_','')}</span>
+            </td>
+            <td class="session-name-cell">
+                <span class="session-name">${session.name||'Tanpa nama'}</span>
+                ${isActive?'<span class="session-live-badge">&#9679; LIVE</span>':''}
+            </td>
+            <td>${session.startTime||'---'}</td>
+            ${endTimeCell}
+            <td style="text-align:right; padding-right:16px">
+                <div class="session-actions">
+                    <span class="record-count-badge">${count} record</span>
+                    ${!isActive?`
+                    <button class="session-export-btn" onclick="exportSession('${session.id}','${(session.name||'').replace(/'/g,"\\'")}',event)" title="Export">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    </button>
+                    <button class="session-rename-btn" onclick="openRenameModal('${session.id}','${(session.name||'').replace(/'/g,"\\'")}',event)" title="Rename">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                    </button>
+                    <button class="session-delete-btn" onclick="deleteSession('${session.id}','${(session.name||'').replace(/'/g,"\\'")}',event)" title="Hapus">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6m4-6v6"></path></svg>
+                    </button>`:''}
+                </div>
+            </td>
+        </tr>
+        <tr class="session-detail-row" id="detail_${session.id}" style="display:none">
+            <td colspan="5" style="padding:0">${innerTable}</td>
+        </tr>`;
+    }).join('');
+
+    // Restore previously expanded sessions
+    openSessions.forEach(sessionId => {
+        const detail  = document.getElementById(`detail_${sessionId}`);
+        const chevron = document.getElementById(`chevron_${sessionId}`);
+        if (detail)  detail.style.display  = 'table-row';
+        if (chevron) chevron.textContent   = '▼';
+    });
+}
+
+function toggleSessionDetail(sessionId) {
+    const detail =document.getElementById(`detail_${sessionId}`);
+    const chevron=document.getElementById(`chevron_${sessionId}`);
+    if (!detail) return;
+    const isOpen=detail.style.display!=='none';
+    detail.style.display=isOpen?'none':'table-row';
+    if (chevron) chevron.textContent=isOpen?'\u25B6':'\u25BC';
 }
 
 function parseTimestamp(timestamp) {
     try {
-        const [time, date] = timestamp.split(' ');
-        const [h, m, s]    = time.split(':').map(Number);
-        const [d, mo, y]   = date.split('/').map(Number);
-        return new Date(y, mo - 1, d, h, m, s);
-    } catch (e) { return new Date(); }
-}
-
-function updateHistoryUI(data) {
-    const tbody        = document.getElementById('historyTableBody');
-    const historyCount = document.getElementById('historyCount');
-    historyCount.textContent = `${data.length} captured records`;
-    if (data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="loading-cell">No history data available yet</td></tr>';
-        return;
-    }
-    tbody.innerHTML = data.map(entry => {
-        const pfClass = entry.PowerFactor >= 0.95 ? 'color:#00A651' : 'color:#ED1C24';
-        return `<tr>
-            <td>${entry.timestamp}</td>
-            <td>${entry.Voltage?.toFixed(2)    || '---'}</td>
-            <td>${entry.Current?.toFixed(2)    || '---'}</td>
-            <td>${entry.Power?.toFixed(2)      || '---'}</td>
-            <td>${entry.Energy?.toFixed(3)     || '---'}</td>
-            <td style="${pfClass}">${entry.PowerFactor?.toFixed(3) || '---'}</td>
-        </tr>`;
-    }).join('');
+        const [time,date]=timestamp.split(' ');
+        const [h,m,s]   =time.split(':').map(Number);
+        const [d,mo,y]  =date.split('/').map(Number);
+        return new Date(y,mo-1,d,h,m,s);
+    } catch(e){ return new Date(); }
 }
 
 // ====================================
-// EXPORT & DELETE
+// EXCEL HELPERS
+// ====================================
+function _buildExcelRow(entry, sessionLabel) {
+    const row={};
+    if (sessionLabel!==undefined) row['Sesi']=sessionLabel;
+    row['Timestamp']               =entry.timestamp     ??'';
+    row['Status']                  =entry.offline?'OFFLINE':'online';
+    row['Voltage (V)']             =entry.Voltage       !=null?parseFloat(entry.Voltage.toFixed(2))       :'';
+    row['Current (A)']             =entry.Current       !=null?parseFloat(entry.Current.toFixed(2))       :'';
+    row['Power (W)']               =entry.Power         !=null?parseFloat(entry.Power.toFixed(2))         :'';
+    row['Apparent Power (kVA)']    =entry.Apparent      !=null?parseFloat(entry.Apparent.toFixed(4))      :'';
+    row['Reactive Power (kVAR)']   =entry.Reactive      !=null?parseFloat(entry.Reactive.toFixed(4))      :'';
+    row['Power Factor']            =entry.PowerFactor   !=null?parseFloat(entry.PowerFactor.toFixed(4))   :'';
+    row['Phase Angle (°)']         =entry.Phase1        !=null?parseFloat(entry.Phase1.toFixed(3))        :'';
+    row['Frequency (Hz)']          =entry.Frequency     !=null?parseFloat(entry.Frequency.toFixed(1))     :'';
+    row['Active Energy (kWh)']     =entry.Energy        !=null?parseFloat(entry.Energy.toFixed(4))        :'';
+    row['Apparent Energy (kVAh)']  =entry.EnergyApparent!=null?parseFloat(entry.EnergyApparent.toFixed(4)):'';
+    row['Reactive Energy (kVARh)'] =entry.EnergyReactive!=null?parseFloat(entry.EnergyReactive.toFixed(4)):'';
+    return row;
+}
+
+const _COL_WIDTHS_WITH_SESSION=[
+    {wch:28},{wch:20},{wch:10},
+    {wch:13},{wch:13},{wch:13},
+    {wch:20},{wch:20},{wch:14},
+    {wch:16},{wch:14},
+    {wch:20},{wch:22},{wch:22}
+];
+const _COL_WIDTHS_NO_SESSION=_COL_WIDTHS_WITH_SESSION.slice(1);
+
+// ====================================
+// EXPORT ALL
 // ====================================
 async function exportSpreadsheet() {
-    if (historyData.length === 0) {
-        await showModal('Tidak Ada Data', 'Tidak ada data untuk diekspor!', 'warning', ['ok']);
-        return;
-    }
-    const confirmed = await showModal('Konfirmasi Export',
-        `Anda akan mengekspor ${historyData.length} record ke Excel.\n\n⚠️ PERHATIAN: Setelah ekspor berhasil, semua data history akan DIHAPUS dari Firebase!\n\nApakah Anda yakin ingin melanjutkan?`,
-        'warning', ['confirm']);
+    if (!historyData.length) { await showModal('Tidak Ada Data','Tidak ada data untuk diekspor!','warning',['ok']); return; }
+    const confirmed=await showModal('Konfirmasi Export',
+        `Ekspor ${historyData.length} record ke Excel?\n\nSetelah ekspor, data DIHAPUS dari Firebase!`,'warning',['confirm']);
     if (!confirmed) return;
-
     try {
-        const excelData = historyData.map(entry => ({
-            'Timestamp':             entry.timestamp,
-            'Voltage (V)':           entry.Voltage?.toFixed(2)     || '',
-            'Current (A)':           entry.Current?.toFixed(2)     || '',
-            'Power (W)':             entry.Power?.toFixed(2)       || '',
-            'Apparent Power (kVA)':  entry.Apparent?.toFixed(3)    || '',
-            'Reactive Power (kVAR)': entry.Reactive?.toFixed(3)    || '',
-            'Energy (kWh)':          entry.Energy?.toFixed(3)      || '',
-            'Frequency (Hz)':        entry.Frequency?.toFixed(1)   || '',
-            'Power Factor':          entry.PowerFactor?.toFixed(3) || ''
-        }));
-
-        const ws = XLSX.utils.json_to_sheet(excelData);
-        ws['!cols'] = [
-            { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
-            { wch: 20 }, { wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 15 }
-        ];
-
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, 'Energy History');
-
-        const metadata = [
-            ['Smart Energy Monitor - Export Report'], [''],
-            ['Export Date',         new Date().toLocaleString('id-ID')],
-            ['Total Records',       historyData.length],
-            ['Device ID',           'alat1'], [''],
-            ['Summary Statistics'],
-            ['Average Voltage (V)',  calculateAverage(historyData, 'Voltage').toFixed(2)],
-            ['Average Current (A)',  calculateAverage(historyData, 'Current').toFixed(2)],
-            ['Average Power (W)',    calculateAverage(historyData, 'Power').toFixed(2)],
-            ['Total Energy (kWh)',   calculateSum(historyData, 'Energy').toFixed(3)],
-            ['Average Power Factor', calculateAverage(historyData, 'PowerFactor').toFixed(3)]
-        ];
-        const wsMeta = XLSX.utils.aoa_to_sheet(metadata);
-        wsMeta['!cols'] = [{ wch: 25 }, { wch: 20 }];
-        XLSX.utils.book_append_sheet(wb, wsMeta, 'Summary');
-
-        XLSX.writeFile(wb, `Smart_Energy_History_${new Date().toISOString().split('T')[0]}_${Date.now()}.xlsx`);
-        await deleteHistoryAfterExport();
-    } catch (error) {
-        await showModal('Export Gagal', 'Gagal mengekspor data!\n\nError: ' + error.message, 'error', ['ok']);
-    }
-}
-
-function calculateAverage(data, field) {
-    if (!data.length) return 0;
-    return data.reduce((acc, e) => acc + (e[field] || 0), 0) / data.length;
-}
-
-function calculateSum(data, field) {
-    return data.reduce((acc, e) => acc + (e[field] || 0), 0);
-}
-
-async function deleteHistoryAfterExport() {
-    try {
+        const sessions  =Object.values(sessionsData).sort((a,b)=>(a.startTimestamp||0)-(b.startTimestamp||0));
+        const onlineRows=historyData.filter(e=>!e.offline);
+        const excelData =historyData.map(e=>{
+            const sess=sessionsData[e.sessionId];
+            return _buildExcelRow(e,sess?.name||e.sessionId||'---');
+        });
+        const ws=XLSX.utils.json_to_sheet(excelData);
+        ws['!cols']=_COL_WIDTHS_WITH_SESSION;
+        const avg=f=>onlineRows.length?onlineRows.reduce((s,e)=>s+(e[f]||0),0)/onlineRows.length:0;
+        const sum=f=>onlineRows.reduce((s,e)=>s+(e[f]||0),0);
+        const wsMeta=XLSX.utils.aoa_to_sheet([
+            ['Smart Energy Monitor - Export Report'],[''],
+            ['Export Date',new Date().toLocaleString('id-ID')],
+            ['Total Sesi',sessions.length],['Total Records',historyData.length],
+            ['Records Online',onlineRows.length],
+            ['Records Offline (nilai=0)',historyData.length-onlineRows.length],
+            ['Device ID','alat1'],[''],
+            ['Summary Statistics (data online saja)'],[''],
+            ['Parameter','Rata-rata','Satuan'],
+            ['Voltage',avg('Voltage').toFixed(2),'V'],
+            ['Current',avg('Current').toFixed(2),'A'],
+            ['Power',avg('Power').toFixed(2),'W'],
+            ['Apparent Power',avg('Apparent').toFixed(4),'kVA'],
+            ['Reactive Power',avg('Reactive').toFixed(4),'kVAR'],
+            ['Power Factor',avg('PowerFactor').toFixed(4),''],
+            ['Phase Angle',avg('Phase1').toFixed(3),'°'],
+            ['Frequency',avg('Frequency').toFixed(1),'Hz'],
+            ['Total Active Energy',sum('Energy').toFixed(4),'kWh'],
+            ['Total Apparent Energy',sum('EnergyApparent').toFixed(4),'kVAh'],
+            ['Total Reactive Energy',sum('EnergyReactive').toFixed(4),'kVARh'],[''],
+            ['Daftar Sesi'],
+            ['No','Nama Sesi','Waktu Mulai','Waktu Selesai','Records'],
+            ...sessions.map((s,i)=>[i+1,s.name||'---',s.startTime||'---',s.endTime||'Belum selesai',s.recordCount||'---'])
+        ]);
+        wsMeta['!cols']=[{wch:28},{wch:18},{wch:10},{wch:22},{wch:22},{wch:15}];
+        const wb=XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb,ws,'Energy History');
+        XLSX.utils.book_append_sheet(wb,wsMeta,'Summary');
+        XLSX.writeFile(wb,`Smart_Energy_History_${new Date().toISOString().split('T')[0]}_${Date.now()}.xlsx`);
         await database.ref('alat1/History').remove();
-        await showModal('Export Berhasil!', 'Data telah disimpan ke file Excel dan history di Firebase telah dihapus.', 'success', ['ok']);
-        historyData = [];
-        updateHistoryUI([]);
-    } catch (error) {
-        await showModal('Perhatian', 'File Excel berhasil disimpan, tetapi gagal menghapus data dari Firebase.\n\nError: ' + error.message, 'warning', ['ok']);
-    }
+        historyData=[]; recordsBySession={}; sessionsData={};
+        buildSessionUI();
+        await showModal('Export Berhasil!','Data disimpan ke Excel dan history Firebase dihapus.','success',['ok']);
+    } catch(error){ await showModal('Export Gagal','Error: '+error.message,'error',['ok']); }
 }
 
 // ====================================
-// CONTROL FUNCTIONS
+// EXPORT SINGLE SESSION
+// ====================================
+async function exportSession(sessionId, sessionName, event) {
+    event.stopPropagation();
+    const records=recordsBySession[sessionId]||[];
+    if (!records.length) { await showModal('Tidak Ada Data',`Sesi "${sessionName}" belum memiliki record.`,'warning',['ok']); return; }
+    const confirmed=await showModal('Export Sesi',
+        `Ekspor ${records.length} record dari sesi:\n"${sessionName}"\n\nData Firebase TIDAK dihapus. Lanjutkan?`,'info',['confirm']);
+    if (!confirmed) return;
+    try {
+        const session   =sessionsData[sessionId];
+        const onlineRows=records.filter(e=>!e.offline);
+        const excelData =records.sort((a,b)=>parseTimestamp(a.timestamp)-parseTimestamp(b.timestamp)).map(e=>_buildExcelRow(e));
+        const ws=XLSX.utils.json_to_sheet(excelData);
+        ws['!cols']=_COL_WIDTHS_NO_SESSION;
+        const avg=f=>onlineRows.length?onlineRows.reduce((s,e)=>s+(e[f]||0),0)/onlineRows.length:0;
+        const sum=f=>onlineRows.reduce((s,e)=>s+(e[f]||0),0);
+        const wsMeta=XLSX.utils.aoa_to_sheet([
+            ['Smart Energy Monitor - Session Export'],[''],
+            ['Nama Sesi',sessionName],
+            ['Export Date',new Date().toLocaleString('id-ID')],
+            ['Waktu Mulai',session?.startTime||'---'],
+            ['Waktu Selesai',session?.endTime||'Berlangsung'],
+            ['Total Records',records.length],
+            ['Records Online',onlineRows.length],
+            ['Records Offline (nilai=0)',records.length-onlineRows.length],
+            ['Device ID','alat1'],[''],
+            ['Summary Statistics (data online saja)'],[''],
+            ['Parameter','Rata-rata','Satuan'],
+            ['Voltage',avg('Voltage').toFixed(2),'V'],
+            ['Current',avg('Current').toFixed(2),'A'],
+            ['Power',avg('Power').toFixed(2),'W'],
+            ['Apparent Power',avg('Apparent').toFixed(4),'kVA'],
+            ['Reactive Power',avg('Reactive').toFixed(4),'kVAR'],
+            ['Power Factor',avg('PowerFactor').toFixed(4),''],
+            ['Phase Angle',avg('Phase1').toFixed(3),'°'],
+            ['Frequency',avg('Frequency').toFixed(1),'Hz'],
+            ['Total Active Energy',sum('Energy').toFixed(4),'kWh'],
+            ['Total Apparent Energy',sum('EnergyApparent').toFixed(4),'kVAh'],
+            ['Total Reactive Energy',sum('EnergyReactive').toFixed(4),'kVARh'],
+        ]);
+        wsMeta['!cols']=[{wch:28},{wch:18},{wch:10}];
+        const wb=XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb,ws,'Data');
+        XLSX.utils.book_append_sheet(wb,wsMeta,'Summary');
+        XLSX.writeFile(wb,`${sessionName.replace(/[\\/:*?"<>|]/g,'_')}.xlsx`);
+        await showModal('Export Berhasil!',`${records.length} record dari sesi "${sessionName}" berhasil diekspor.`,'success',['ok']);
+    } catch(error){ await showModal('Export Gagal','Error: '+error.message,'error',['ok']); }
+}
+
+// ====================================
+// CLEAR ALL RECORDS
 // ====================================
 async function clearRecords() {
-    if (historyData.length === 0) {
-        await showModal('Tidak Ada Data', 'Tidak ada data history yang perlu dihapus.', 'info', ['ok']);
-        return;
+    if (!historyData.length&&!Object.keys(sessionsData).length) {
+        await showModal('Tidak Ada Data','Tidak ada history yang perlu dihapus.','info',['ok']); return;
     }
-    const confirmed = await showModal('Konfirmasi Hapus Record',
-        `Anda akan menghapus ${historyData.length} record history dari Firebase.\n\n⚠️ Data yang dihapus TIDAK DAPAT dikembalikan.\n\nApakah Anda yakin ingin melanjutkan?`,
-        'warning', ['confirm']);
+    const confirmed=await showModal('Konfirmasi Hapus Record',
+        'Hapus SEMUA sesi & record dari Firebase?\n\nData TIDAK DAPAT dikembalikan.','warning',['confirm']);
     if (!confirmed) return;
     try {
         await database.ref('alat1/History').remove();
-        historyData = [];
-        updateHistoryUI([]);
-        await showModal('Berhasil Dihapus', 'Semua data record history telah berhasil dihapus dari Firebase.', 'success', ['ok']);
-    } catch (error) {
-        await showModal('Error', 'Gagal menghapus data record!\n\nError: ' + error.message, 'error', ['ok']);
+        historyData=[]; recordsBySession={}; sessionsData={};
+        buildSessionUI();
+        await showModal('Berhasil Dihapus','Semua data rekaman telah dihapus.','success',['ok']);
+    } catch(error){ await showModal('Error','Gagal menghapus! Error: '+error.message,'error',['ok']); }
+}
+
+// ====================================
+// CAPTURE UI STATE (driven by server)
+// ====================================
+let captureActive   = false;   // mirrors server state
+let captureInterval = 3000;    // ms — for display only
+
+let _captureStatusPollId = null;
+
+/** Pull /api/capture/status and sync the UI. */
+async function syncCaptureStatus() {
+    try {
+        const res  = await fetch('/api/capture/status');
+        const json = await res.json();
+        _applyCaptureStatus(json);
+    } catch (e) {
+        console.warn('[Capture] Status poll failed:', e);
     }
 }
 
+function _applyCaptureStatus(status) {
+    captureActive      = status.active;
+    captureInterval    = (status.interval || 3) * 1000;
+    currentSessionId   = status.session_id || null;
+
+    _updateCaptureButtonUI(status.active);
+
+    // Update interval display to match server
+    const id = document.getElementById('intervalDisplay');
+    if (id && status.interval) {
+        id.textContent = `Current: ${status.interval} seconds (server)`;
+    }
+
+    // Rebuild table so LIVE badge & "sedang berlangsung" stay accurate
+    buildSessionUI();
+}
+
+function _startStatusPolling() {
+    if (_captureStatusPollId) return;
+    _captureStatusPollId = setInterval(syncCaptureStatus, 4000);
+}
+
+function _stopStatusPolling() {
+    if (_captureStatusPollId) { clearInterval(_captureStatusPollId); _captureStatusPollId = null; }
+}
+
+// ====================================
+// CAPTURE BUTTON HELPERS
+// ====================================
+function _captureStartHTML() {
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> START CAPTURE`;
+}
+function _captureStopHTML() {
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg> STOP CAPTURE`;
+}
+
+function _updateCaptureButtonUI(active) {
+    const btn=document.getElementById('captureBtn');
+    if (!btn) return;
+    btn.classList.toggle('active',active);
+    btn.innerHTML=active?_captureStopHTML():_captureStartHTML();
+}
+
+// ====================================
+// TOGGLE CAPTURE — calls server API
+// ====================================
 async function toggleCapture() {
-    // Cek koneksi — jika offline tampilkan popup dan batalkan
-    if (!isConnected) {
-        await showModal('Device Offline',
-            'Tidak dapat memulai capture.\nDevice sedang offline, pastikan device menyala dan terhubung ke internet.',
-            'error', ['ok']);
-        return;
-    }
-
-    const captureBtn = document.getElementById('captureBtn');
-    captureActive = !captureActive;
-
-    if (captureActive) {
-        captureCount = 0;
-        captureBtn.classList.add('active');
-        captureBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg> STOP CAPTURE`;
-
-        try {
-            await database.ref('alat1/Commands/resetEnergy').set({ command: true, timestamp: Date.now() });
-            setTimeout(() => database.ref('alat1/Commands/resetEnergy').remove(), 5000);
-        } catch (error) {
-            console.error('Auto reset energy gagal:', error);
+    if (!captureActive) {
+        if (!isConnected) {
+            await showModal('Device Offline',
+                'Tidak dapat memulai capture.\nPastikan device menyala dan terhubung ke jaringan.',
+                'error', ['ok']);
+            return;
         }
-
-        startCaptureInterval();
-        await showModal('Capture Diaktifkan',
-            `Mode capture telah diaktifkan.\n\nEnergy counter otomatis direset ke nol.\nData akan disimpan setiap ${captureInterval / 1000} detik ke Firebase History.`,
-            'success', ['ok']);
+        openSessionNameModal();
     } else {
-        stopCaptureInterval();
-        captureBtn.classList.remove('active');
-        captureBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> START CAPTURE`;
-        _captureWasActive = false;
-        await showModal('Capture Dihentikan',
-            `Mode capture telah dihentikan.\n\nTotal data yang tersimpan: ${captureCount} records.`,
-            'info', ['ok']);
+        const confirmed=await showModal('Hentikan Rekaman',
+            'Hentikan sesi rekaman yang sedang berlangsung?\n\nData sudah tersimpan di Firebase.','warning',['confirm']);
+        if (!confirmed) return;
+        await _apiStopCapture();
     }
 }
 
-function startCaptureInterval() {
-    if (captureIntervalId) clearInterval(captureIntervalId);
-    captureIntervalId = window.setInterval(() => {
-        if (captureActive && realtimeData) captureDataToHistory();
-    }, captureInterval);
-}
-
-function stopCaptureInterval() {
-    if (captureIntervalId) { clearInterval(captureIntervalId); captureIntervalId = null; }
-}
-
-async function captureDataToHistory() {
-    if (!realtimeData) return;
+async function _apiStopCapture() {
     try {
-        const timestamp = new Date().toLocaleString('id-ID', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit',
-            day: '2-digit', month: '2-digit', year: 'numeric'
-        }).replace(',', '');
+        const res=await fetch('/api/capture/stop',{method:'POST'});
+        const json=await res.json();
+        if (json.ok) {
+            captureActive=false;
+            currentSessionId=null;
+            _updateCaptureButtonUI(false);
+            buildSessionUI();
+        } else {
+            await showModal('Error','Gagal menghentikan: '+json.error,'error',['ok']);
+        }
+    } catch(e){
+        await showModal('Error','Network error: '+e.message,'error',['ok']);
+    }
+}
 
-        await database.ref(`/alat1/History/capture_${Date.now()}`).set({
-            timestamp,
-            Voltage:     realtimeData.Voltage     || 0,
-            Current:     realtimeData.Current     || 0,
-            Power:       realtimeData.Power       || 0,
-            Apparent:    realtimeData.Apparent    || 0,
-            Reactive:    realtimeData.Reactive    || 0,
-            Energy:      realtimeData.Energy      || 0,
-            Frequency:   realtimeData.Frequency   || 0,
-            PowerFactor: realtimeData.PowerFactor || 0
+// ====================================
+// SESSION NAME MODAL
+// ====================================
+function openSessionNameModal() {
+    const modal=document.getElementById('sessionNameModal');
+    const input=document.getElementById('sessionNameInput');
+    const now=new Date(), pad=v=>String(v).padStart(2,'0');
+    input.value=`Rekaman ${pad(now.getDate())}/${pad(now.getMonth()+1)}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    modal.classList.add('active'); document.body.style.overflow='hidden';
+    setTimeout(()=>{ input.focus(); input.select(); },120);
+}
+
+function closeSessionNameModal() {
+    document.getElementById('sessionNameModal').classList.remove('active');
+    document.body.style.overflow='';
+    _renamingSessionId=null; _resetSessionModal();
+}
+
+function _resetSessionModal() {
+    const modal=document.getElementById('sessionNameModal');
+    modal.querySelector('.modal-title').textContent  ='Mulai Rekaman Baru';
+    modal.querySelector('.modal-message').textContent='Beri nama sesi rekaman ini sebelum memulai.';
+    const btn=modal.querySelector('.modal-btn-primary');
+    btn.innerHTML='&#9654; MULAI REKAM'; btn.onclick=confirmStartCapture;
+}
+
+function openRenameModal(sessionId, currentName, event) {
+    event.stopPropagation();
+    _renamingSessionId=sessionId;
+    const modal=document.getElementById('sessionNameModal');
+    const input=document.getElementById('sessionNameInput');
+    modal.querySelector('.modal-title').textContent  ='Rename Sesi';
+    modal.querySelector('.modal-message').textContent='Ubah nama sesi rekaman ini.';
+    const btn=modal.querySelector('.modal-btn-primary');
+    btn.innerHTML='SIMPAN NAMA'; btn.onclick=confirmRenameSession;
+    input.value=currentName;
+    modal.classList.add('active'); document.body.style.overflow='hidden';
+    setTimeout(()=>{ input.focus(); input.select(); },120);
+}
+
+async function confirmRenameSession() {
+    const input  =document.getElementById('sessionNameInput');
+    const newName=input.value.trim();
+    if (!newName) { await showModal('Nama Kosong','Nama sesi tidak boleh kosong.','warning',['ok']); return; }
+    const targetId=_renamingSessionId;
+    closeSessionNameModal();
+    if (!targetId) return;
+    try {
+        await database.ref(`alat1/History/${targetId}/_meta`).update({name:newName});
+        if (sessionsData[targetId]) sessionsData[targetId].name=newName;
+        buildSessionUI();
+        await showModal('Berhasil',`Nama sesi diubah menjadi:\n"${newName}"`,'success',['ok']);
+    } catch(e){ await showModal('Error','Gagal mengubah nama! Error: '+e.message,'error',['ok']); }
+}
+
+/** Called when user clicks "MULAI REKAM" in the session-name modal. */
+async function confirmStartCapture() {
+    const input       =document.getElementById('sessionNameInput');
+    const sessionName =(input.value.trim())||`Rekaman ${new Date().toLocaleTimeString('id-ID')}`;
+    const intervalSec =Math.round(captureInterval/1000)||3;
+    closeSessionNameModal();
+
+    try {
+        const res=await fetch('/api/capture/start',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({sessionName,interval:intervalSec})
         });
-        captureCount++;
-    } catch (error) {
-        console.error('Error capturing data:', error);
+        const json=await res.json();
+        if (!json.ok) { await showModal('Error','Gagal memulai capture: '+(json.error||''),'error',['ok']); return; }
+
+        captureActive    =true;
+        currentSessionId =json.session_id;
+        _updateCaptureButtonUI(true);
+        buildSessionUI();
+
+        await showModal('Capture Diaktifkan (Server)',
+            `Sesi: "${json.session_name}"\n\nRekaman dijalankan di SERVER — tetap berjalan meski tab/browser ditutup.\nInterval: ${intervalSec}s`,
+            'success',['ok']);
+
+    } catch(e){
+        await showModal('Error','Network error: '+e.message,'error',['ok']);
     }
-}
-
-async function setCaptureInterval() {
-    const intervalInput   = document.getElementById('intervalInput');
-    const intervalUnit    = document.getElementById('intervalUnit');
-    const intervalDisplay = document.getElementById('intervalDisplay');
-    const value           = parseInt(intervalInput.value);
-    const multiplier      = parseInt(intervalUnit.value);
-
-    if (isNaN(value) || value < 1) {
-        await showModal('Input Tidak Valid', 'Masukkan nilai interval yang valid (minimal 1)!', 'warning', ['ok']);
-        return;
-    }
-    const intervalSeconds = value * multiplier;
-    captureInterval = intervalSeconds * 1000;
-    intervalDisplay.textContent = multiplier === 1
-        ? `Current: ${value} seconds`
-        : multiplier === 60
-            ? `Current: ${value} minutes (${intervalSeconds}s)`
-            : `Current: ${value} hours (${intervalSeconds}s)`;
-
-    if (captureActive) startCaptureInterval();
-    await showModal('Interval Diperbarui',
-        `Interval capture berhasil diubah menjadi ${value} ${intervalUnit.options[intervalUnit.selectedIndex].text.toLowerCase()}.`,
-        'success', ['ok']);
 }
 
 // ====================================
-// SETTINGS
+// DELETE SESSION
 // ====================================
-function loadSettings() {
-    const savedThresholds = localStorage.getItem('thresholds');
-    if (savedThresholds) thresholds = JSON.parse(savedThresholds);
-    ['voltageMax','voltageMin','currentMax','powerMax','powerFactorMin','energyLimit'].forEach(id => {
-        if (document.getElementById(id)) document.getElementById(id).value = thresholds[id];
-    });
-
-    const savedPrefs = localStorage.getItem('preferences');
-    if (savedPrefs) preferences = JSON.parse(savedPrefs);
-    ['decimalPlaces','updateRate'].forEach(id => {
-        if (document.getElementById(id)) document.getElementById(id).value = preferences[id];
-    });
-    if (document.getElementById('soundAlerts'))  document.getElementById('soundAlerts').checked  = preferences.soundAlerts;
-    if (document.getElementById('visualAlerts')) document.getElementById('visualAlerts').checked = preferences.visualAlerts;
-
-    const savedAutoExport = localStorage.getItem('autoExportInterval');
-    if (savedAutoExport) {
-        autoExportInterval = savedAutoExport;
-        if (document.getElementById('autoExportInterval')) {
-            document.getElementById('autoExportInterval').value = autoExportInterval;
-            updateAutoExportStatus();
-        }
-    }
-}
-
-async function saveThresholds() {
-    thresholds = {
-        voltageMax:     parseFloat(document.getElementById('voltageMax').value),
-        voltageMin:     parseFloat(document.getElementById('voltageMin').value),
-        currentMax:     parseFloat(document.getElementById('currentMax').value),
-        powerMax:       parseFloat(document.getElementById('powerMax').value),
-        powerFactorMin: parseFloat(document.getElementById('powerFactorMin').value),
-        energyLimit:    parseFloat(document.getElementById('energyLimit').value)
-    };
-    localStorage.setItem('thresholds', JSON.stringify(thresholds));
-    await showModal('Pengaturan Disimpan', 'Threshold alert telah berhasil disimpan!', 'success', ['ok']);
-}
-
-async function resetThresholds() {
-    const confirmed = await showModal('Konfirmasi Reset',
-        'Apakah Anda yakin ingin mereset semua threshold ke nilai default?',
-        'warning', ['confirm']);
+async function deleteSession(sessionId, sessionName, event) {
+    event.stopPropagation();
+    const confirmed=await showModal('Hapus Sesi',
+        `Hapus sesi:\n"${sessionName}"\n\nSemua record akan ikut terhapus dan TIDAK DAPAT dikembalikan.`,'warning',['confirm']);
     if (!confirmed) return;
-    thresholds = { voltageMax: 240, voltageMin: 200, currentMax: 20, powerMax: 4400, powerFactorMin: 0.85, energyLimit: 1000 };
-    ['voltageMax','voltageMin','currentMax','powerMax','powerFactorMin','energyLimit'].forEach(id => {
-        if (document.getElementById(id)) document.getElementById(id).value = thresholds[id];
-    });
-    localStorage.setItem('thresholds', JSON.stringify(thresholds));
-    await showModal('Reset Berhasil', 'Semua threshold telah direset ke nilai default.', 'success', ['ok']);
-}
-
-function checkThresholds(data) {
-    if (!preferences.visualAlerts) return;
-    const triggered =
-        data.Voltage     >  thresholds.voltageMax     ||
-        data.Voltage     <  thresholds.voltageMin     ||
-        data.Current     >  thresholds.currentMax     ||
-        data.Power       >  thresholds.powerMax       ||
-        data.PowerFactor <  thresholds.powerFactorMin ||
-        data.Energy      >  thresholds.energyLimit;
-
-    if (triggered) {
-        const lastAlertTime = parseInt(localStorage.getItem('lastAlertTime') || 0);
-        if (Date.now() - lastAlertTime > 60000) {
-            localStorage.setItem('lastAlertTime', Date.now());
-            if (preferences.soundAlerts) playAlertSound();
-        }
-    }
-}
-
-function playAlertSound() {
     try {
-        const ac   = new (window.AudioContext || window.webkitAudioContext)();
-        const osc  = ac.createOscillator();
-        const gain = ac.createGain();
-        osc.connect(gain);
-        gain.connect(ac.destination);
-        osc.frequency.value = 800;
-        osc.type = 'sine';
-        gain.gain.setValueAtTime(0.3, ac.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.5);
-        osc.start(ac.currentTime);
-        osc.stop(ac.currentTime + 0.5);
-    } catch (e) { console.error('Audio error:', e); }
+        await database.ref(`alat1/History/${sessionId}`).remove();
+        delete sessionsData[sessionId]; delete recordsBySession[sessionId];
+        historyData=historyData.filter(r=>r.sessionId!==sessionId);
+        buildSessionUI();
+        await showModal('Sesi Dihapus',`Sesi "${sessionName}" berhasil dihapus.`,'success',['ok']);
+    } catch(e){ await showModal('Error','Gagal menghapus! Error: '+e.message,'error',['ok']); }
 }
 
-async function savePreferences() {
-    preferences = {
-        decimalPlaces: parseInt(document.getElementById('decimalPlaces').value),
-        updateRate:    parseInt(document.getElementById('updateRate').value),
-        soundAlerts:   document.getElementById('soundAlerts').checked,
-        visualAlerts:  document.getElementById('visualAlerts').checked
-    };
-    localStorage.setItem('preferences', JSON.stringify(preferences));
-    await showModal('Preferensi Disimpan', 'Preferensi tampilan telah berhasil disimpan!', 'success', ['ok']);
-}
-
-async function toggleAutoExport() {
-    const selectElement = document.getElementById('autoExportInterval');
-    autoExportInterval  = selectElement.value;
-    localStorage.setItem('autoExportInterval', autoExportInterval);
-    updateAutoExportStatus();
-    if (autoExportInterval === '0') {
-        await showModal('Auto-Export Dinonaktifkan', 'Fitur auto-export telah dinonaktifkan.', 'info', ['ok']);
-    } else {
-        await showModal('Auto-Export Diaktifkan',
-            `Auto-export diatur ke: ${selectElement.options[selectElement.selectedIndex].text}`,
-            'success', ['ok']);
+// ====================================
+// SET CAPTURE INTERVAL
+// ====================================
+async function setCaptureInterval() {
+    const ii=document.getElementById('intervalInput');
+    const iu=document.getElementById('intervalUnit');
+    const id=document.getElementById('intervalDisplay');
+    const value=parseInt(ii.value), multiplier=parseInt(iu.value);
+    if (isNaN(value)||value<1) {
+        await showModal('Input Tidak Valid','Masukkan nilai interval yang valid (minimal 1)!','warning',['ok']); return;
     }
-}
+    const totalSec=value*multiplier;
+    captureInterval=totalSec*1000;
+    const unitLabel=iu.options[iu.selectedIndex].text.toLowerCase();
+    id.textContent=multiplier===1?`Current: ${value} seconds`:`Current: ${value} ${unitLabel} (${totalSec}s)`;
 
-function updateAutoExportStatus() {
-    const statusElement = document.getElementById('autoExportStatus');
-    const selectElement = document.getElementById('autoExportInterval');
-    if (!statusElement || !selectElement) return;
-    statusElement.textContent = autoExportInterval === '0'
-        ? 'Status: Disabled'
-        : `Status: ${selectElement.options[selectElement.selectedIndex].text}`;
+    // Tell server to update interval (takes effect on next sleep cycle)
+    if (captureActive) {
+        try {
+            await fetch('/api/capture/interval',{
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({interval:totalSec})
+            });
+        } catch(e){ console.warn('[Capture] Could not update server interval:',e); }
+    }
+    await showModal('Interval Diperbarui',`Interval diubah menjadi ${value} ${unitLabel}.`,'success',['ok']);
 }
 
 // ====================================
 // INITIALIZE APP
 // ====================================
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', async ()=>{
     loadChartDataFromStorage();
     await loadDailyAggFromFirebase();
-
     initChart();
 
-    const parameterSelect = document.getElementById('parameterSelect');
-    if (parameterSelect) parameterSelect.addEventListener('change', changeParameter);
-
-    document.querySelectorAll('.metric-card-compact').forEach(card => {
+    document.getElementById('parameterSelect')?.addEventListener('change',changeParameter);
+    document.querySelectorAll('.metric-card-compact').forEach(card=>{
         if (!card.dataset.param) return;
-        card.addEventListener('click', () => _switchParameter(card.dataset.param));
-    });
-
-    document.querySelectorAll('.metric-card-compact').forEach(card => {
-        card.classList.toggle('card-active', card.dataset.param === selectedParameter);
+        card.addEventListener('click',()=>_switchParameter(card.dataset.param));
+        card.classList.toggle('card-active',card.dataset.param===selectedParameter);
     });
 
     initRealtimeListener();
     initHistoryListener();
     updateConnectionStatus(false);
     startConnectionMonitoring();
-    loadSettings();
+
+    // ── Sync UI with server capture state on load ──
+    await syncCaptureStatus();
+    _startStatusPolling();   // keep UI in sync every 4 s
+
+    document.getElementById('sessionNameInput')?.addEventListener('keydown',e=>{
+        if (e.key==='Enter') { _renamingSessionId?confirmRenameSession():confirmStartCapture(); }
+    });
 });
 
-window.addEventListener('beforeunload', () => {
+window.addEventListener('beforeunload',()=>{
     saveChartDataToStorage();
     if (_lastDayStr) _flushDailyAgg(_lastDayStr);
 });

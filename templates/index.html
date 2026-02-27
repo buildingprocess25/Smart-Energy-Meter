@@ -10,7 +10,6 @@
 
     <!-- Background -->
     <div class="background">
-        <div class="grid-pattern"></div>
         <div class="glow-orb glow-orb-1"></div>
         <div class="glow-orb glow-orb-2"></div>
     </div>
@@ -43,15 +42,24 @@
     <nav class="nav-tabs">
         <div class="container">
             <button class="tab-btn active" onclick="switchTab('realtime')" id="realtimeTab">
-                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                </svg>
                 Summary
             </button>
             <button class="tab-btn" onclick="switchTab('history')" id="historyTab">
-                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v6c0 1.7 4 3 9 3s9-1.3 9-3V5"></path><path d="M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6"></path></svg>
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                    <path d="M3 5v6c0 1.7 4 3 9 3s9-1.3 9-3V5"></path>
+                    <path d="M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6"></path>
+                </svg>
                 Database
             </button>
             <button class="tab-btn" onclick="switchTab('settings')" id="settingsTab">
-                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0A1.7 1.7 0 0 0 10.1 3V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h0a1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0A1.7 1.7 0 0 0 10.1 3V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h0a1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path>
+                </svg>
                 Settings
             </button>
         </div>
@@ -79,7 +87,9 @@
 
                         <div class="metric-card-compact" data-color="yellow" data-param="voltage">
                             <div class="metric-header-compact">
-                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                                </svg>
                                 <p class="metric-label-compact">Voltage</p>
                             </div>
                             <div class="metric-value-compact">
@@ -90,7 +100,9 @@
 
                         <div class="metric-card-compact" data-color="blue" data-param="current">
                             <div class="metric-header-compact">
-                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                                </svg>
                                 <p class="metric-label-compact">Current</p>
                             </div>
                             <div class="metric-value-compact">
@@ -101,7 +113,10 @@
 
                         <div class="metric-card-compact" data-color="green" data-param="power">
                             <div class="metric-header-compact">
-                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline>
+                                    <polyline points="17 6 23 6 23 12"></polyline>
+                                </svg>
                                 <p class="metric-label-compact">Power</p>
                             </div>
                             <div class="metric-value-compact">
@@ -112,7 +127,10 @@
 
                         <div class="metric-card-compact" data-color="purple" data-param="frequency">
                             <div class="metric-header-compact">
-                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <polyline points="12 6 12 12 16 14"></polyline>
+                                </svg>
                                 <p class="metric-label-compact">Frequency</p>
                             </div>
                             <div class="metric-value-compact">
@@ -123,7 +141,11 @@
 
                         <div class="metric-card-compact" data-color="yellow" data-param="apparent">
                             <div class="metric-header-compact">
-                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                                </svg>
                                 <p class="metric-label-compact">Apparent</p>
                             </div>
                             <div class="metric-value-compact">
@@ -134,7 +156,9 @@
 
                         <div class="metric-card-compact" data-color="blue" data-param="reactive">
                             <div class="metric-header-compact">
-                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                                </svg>
                                 <p class="metric-label-compact">Reactive</p>
                             </div>
                             <div class="metric-value-compact">
@@ -145,7 +169,9 @@
 
                         <div class="metric-card-compact" data-color="green" data-param="energy">
                             <div class="metric-header-compact">
-                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                                </svg>
                                 <p class="metric-label-compact">Energy</p>
                             </div>
                             <div class="metric-value-compact">
@@ -156,7 +182,10 @@
 
                         <div class="metric-card-compact" data-color="purple" data-param="powerFactor">
                             <div class="metric-header-compact">
-                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+                                <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline>
+                                    <polyline points="17 6 23 6 23 12"></polyline>
+                                </svg>
                                 <p class="metric-label-compact">Power Factor</p>
                             </div>
                             <div class="metric-value-compact">
@@ -172,7 +201,6 @@
                             <div class="chart-header">
                                 <h3>Graph</h3>
                                 <div class="chart-header-right">
-                                    <!-- Time filter -->
                                     <div class="time-filter-row">
                                         <div class="time-filter-group">
                                             <button class="time-filter-btn active" data-filter="all"    onclick="setTimeFilter('all')">All</button>
@@ -180,20 +208,17 @@
                                             <button class="time-filter-btn"        data-filter="hour"   onclick="setTimeFilter('hour')">Hour</button>
                                             <button class="time-filter-btn"        data-filter="minute" onclick="setTimeFilter('minute')">Min</button>
                                         </div>
-                                        <span class="filter-info" id="filterInfo"></span>
                                     </div>
-                                    <!-- Controls row -->
                                     <div class="chart-controls">
-                                        <div class="zoom-controls">
-                                            <span class="zoom-hint">
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
-                                                Scroll to zoom
-                                            </span>
-                                            <button class="chart-btn chart-btn-outline" onclick="resetZoom()">
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
-                                                Reset
-                                            </button>
-                                        </div>
+                                        <span class="zoom-hint">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11">
+                                                <circle cx="11" cy="11" r="8"></circle>
+                                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                                <line x1="11" y1="8" x2="11" y2="14"></line>
+                                                <line x1="8" y1="11" x2="14" y2="11"></line>
+                                            </svg>
+                                            Scroll to zoom
+                                        </span>
                                         <select id="parameterSelect" class="parameter-select">
                                             <option value="voltage">Voltage (V)</option>
                                             <option value="current">Current (A)</option>
@@ -204,10 +229,6 @@
                                             <option value="energy">Energy (kWh)</option>
                                             <option value="powerFactor">Power Factor</option>
                                         </select>
-                                        <button class="chart-btn" onclick="clearChartData()">
-                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6m4-6v6"></path></svg>
-                                            Clear
-                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -228,7 +249,11 @@
                         <p id="historyCount">Loading…</p>
                     </div>
                     <button class="btn-export" onclick="exportSpreadsheet()">
-                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
                         Export Spreadsheet
                     </button>
                 </div>
@@ -237,16 +262,15 @@
                         <table class="data-table">
                             <thead>
                                 <tr>
-                                    <th>Timestamp</th>
-                                    <th>Voltage (V)</th>
-                                    <th>Current (A)</th>
-                                    <th>Power (W)</th>
-                                    <th>Energy (kWh)</th>
-                                    <th>PF</th>
+                                    <th style="width:90px">ID File</th>
+                                    <th>Nama File / Sesi</th>
+                                    <th style="width:180px">Waktu Mulai</th>
+                                    <th style="width:180px">Waktu Selesai</th>
+                                    <th style="width:180px; text-align:right">Records</th>
                                 </tr>
                             </thead>
                             <tbody id="historyTableBody">
-                                <tr><td colspan="6" class="loading-cell">Loading history data…</td></tr>
+                                <tr><td colspan="5" class="loading-cell">Memuat data rekaman…</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -262,10 +286,15 @@
                     </div>
                 </div>
                 <div class="control-panel">
+
                     <div class="control-card">
                         <div class="control-header">
                             <div class="control-icon">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6m4-6v6"></path></svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path d="M19 6l-1 14H6L5 6"></path>
+                                    <path d="M10 11v6m4-6v6"></path>
+                                </svg>
                             </div>
                             <div class="control-header-text">
                                 <h4>Clear Records</h4>
@@ -273,14 +302,22 @@
                             </div>
                         </div>
                         <button class="control-btn btn-reset" onclick="clearRecords()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6m4-6v6"></path></svg>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path d="M19 6l-1 14H6L5 6"></path>
+                                <path d="M10 11v6m4-6v6"></path>
+                            </svg>
                             Clear Records
                         </button>
                     </div>
+
                     <div class="control-card">
                         <div class="control-header">
                             <div class="control-icon">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                </svg>
                             </div>
                             <div class="control-header-text">
                                 <h4>Data Capture</h4>
@@ -288,14 +325,21 @@
                             </div>
                         </div>
                         <button class="control-btn btn-capture" id="captureBtn" onclick="toggleCapture()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polygon points="10 8 16 12 10 16 10 8"></polygon>
+                            </svg>
                             Start Capture
                         </button>
                     </div>
+
                     <div class="control-card">
                         <div class="control-header">
                             <div class="control-icon">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <polyline points="12 6 12 12 16 14"></polyline>
+                                </svg>
                             </div>
                             <div class="control-header-text">
                                 <h4>Capture Interval</h4>
@@ -310,24 +354,30 @@
                                 <option value="3600">Hours</option>
                             </select>
                             <button class="control-btn btn-set" onclick="setCaptureInterval()">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
                                 Set
                             </button>
                         </div>
                     </div>
                 </div>
-            </div><!-- /settingsContent -->
+            </div>
 
         </div>
     </main>
 
-    <!-- Modal -->
+    <!-- ===== MODAL ===== -->
     <div id="customModal" class="modal-overlay">
         <div class="modal-container">
             <button class="modal-close" onclick="closeModal()">&times;</button>
             <div class="modal-content">
                 <div class="modal-icon" id="modalIcon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
                 </div>
                 <h3 class="modal-title" id="modalTitle">Notification</h3>
                 <p class="modal-message" id="modalMessage"></p>
@@ -338,15 +388,41 @@
         </div>
     </div>
 
-    <!-- Libraries -->
+    <!-- Modal Nama Sesi -->
+    <div id="sessionNameModal" class="modal-overlay">
+        <div class="modal-container">
+            <button class="modal-close" onclick="closeSessionNameModal()">&times;</button>
+            <div class="modal-content">
+                <div class="modal-icon success">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                </div>
+                <h3 class="modal-title">Mulai Rekaman Baru</h3>
+                <p class="modal-message" style="margin-bottom:14px">Beri nama sesi rekaman ini sebelum memulai.</p>
+                <input type="text" id="sessionNameInput" class="session-name-input"
+                    maxlength="60" autocomplete="off">
+                <div class="modal-buttons" style="margin-top:20px">
+                    <button class="modal-btn modal-btn-secondary" onclick="closeSessionNameModal()">BATAL</button>
+                    <button class="modal-btn modal-btn-primary" onclick="confirmStartCapture()">
+                        MULAI REKAM
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== LIBRARIES ===== -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-
-    <script>const firebaseConfig = {{ firebase_config | tojson }};</script>
+    <script id="firebase-config" type="application/json">{{ firebase_config | tojson }}</script>
+    <script> const firebaseConfig = JSON.parse(document.getElementById('firebase-config').textContent);</script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+
 </body>
 </html>

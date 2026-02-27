@@ -1,2 +1,5 @@
 # Environment variables
 .env
+
+# Firebase credentials (NEVER commit these!)
+serviceAccountKey.json
