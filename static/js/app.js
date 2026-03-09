@@ -27,7 +27,6 @@ let _userIsZoomed   = false;
 let _visiblePoints  = 150;
 
 const MAX_DATA_POINTS = 300;
-// localStorage key no longer used for cross-client sync — kept for backward compat
 const CHART_STORAGE_KEY = 'sem_chartdata_v3';
 const PARAM_KEYS = ['voltage', 'current', 'power', 'frequency', 'energy', 'powerFactor'];
 
@@ -136,7 +135,7 @@ const crosshairPlugin = {
         ctx.strokeStyle = 'rgba(100,116,139,0.4)';
         ctx.setLineDash([4, 4]);
         ctx.stroke();
-        if (timeFilter === 'all') {
+        if (timeFilter === 'all' || timeFilter === 'day') {
             active.forEach(pt => {
                 ctx.beginPath();
                 ctx.arc(pt.element.x, pt.element.y, 4, 0, Math.PI * 2);
@@ -240,7 +239,7 @@ function iSolarTooltipHandler(context) {
     const ttH  = el.offsetHeight || 80;
 
     let left, top;
-    if (timeFilter !== 'all') {
+    if (timeFilter === 'week') {
         left = rect.right  + window.scrollX - ttW - 12;
         top  = rect.top    + window.scrollY + 8;
     } else {
@@ -566,49 +565,36 @@ function rebuildCascadeFromRaw() {
     _prevDayKey  = _dayKey(now);
 
     console.log('[Cascade] Rebuilt from', chartTimestamps.length, 'raw points.',
-        'Phases:', phases,
-        '| Min keys:', Object.keys(phaseMinAgg[phases[0]]?.voltage || {}).length,
-        '| Hour keys:', Object.keys(phaseHourAgg[phases[0]]?.voltage || {}).length,
-        '| Day keys:', Object.keys(phaseDayAgg[phases[0]]?.voltage || {}).length);
+        'Phases:', phases);
 }
 
 // ── View-data builders ────────────────────────────────────────────────────────
-function getMinViewData(phase, param) {
-    const now = new Date();
-    const labels = [], values = [];
-    for (let m = 0; m < 60; m++) {
-        const key = `${now.getFullYear()}-${_p2(now.getMonth()+1)}-${_p2(now.getDate())}T${_p2(now.getHours())}:${_p2(m)}`;
-        labels.push(`${_p2(now.getHours())}:${_p2(m)}`);
-        const e = phaseMinAgg[phase]?.[param]?.[key];
-        values.push(e && e.count > 0 ? parseFloat((e.sum / e.count).toFixed(4)) : null);
-    }
-    return { labels, values };
-}
+// 30-minute interval view for current day (Day filter)
+function get30MinViewData(phase, param) {
+    const now         = new Date();
+    const todayPrefix = `${now.getFullYear()}-${_p2(now.getMonth()+1)}-${_p2(now.getDate())}T`;
+    const labels      = [], values = [];
+    const currentSlot = now.getHours() * 2 + (now.getMinutes() >= 30 ? 1 : 0);
 
-function getHourViewData(phase, param) {
-    const now = new Date();
-    const labels = [], values = [];
-    for (let h = 0; h < 24; h++) {
-        const key = `${now.getFullYear()}-${_p2(now.getMonth()+1)}-${_p2(now.getDate())}T${_p2(h)}`;
-        labels.push(`${_p2(h)}:00`);
-        if (h < now.getHours()) {
-            values.push(_avgOf(phaseHourAgg, phase, param, key) !== null
-                ? parseFloat(_avgOf(phaseHourAgg, phase, param, key).toFixed(4)) : null);
-        } else if (h === now.getHours()) {
-            const entry      = phaseHourAgg[phase]?.[param]?.[key] || { sum: 0, count: 0 };
-            const curMinKey  = _minKey(Date.now());
-            const curMinE    = phaseMinAgg[phase]?.[param]?.[curMinKey];
-            const curMinAvg  = curMinE && curMinE.count > 0 ? curMinE.sum / curMinE.count : null;
-            const totalSum   = entry.sum   + (curMinAvg ?? 0);
-            const totalCount = entry.count + (curMinAvg !== null ? 1 : 0);
-            values.push(totalCount > 0 ? parseFloat((totalSum / totalCount).toFixed(4)) : null);
-        } else {
-            values.push(null);
+    for (let slot = 0; slot < 48; slot++) {
+        const h      = Math.floor(slot / 2);
+        const mStart = (slot % 2) * 30;
+        labels.push(`${_p2(h)}:${_p2(mStart)}`);
+
+        if (slot > currentSlot) { values.push(null); continue; }
+
+        let sum = 0, count = 0;
+        for (let min = mStart; min < mStart + 30; min++) {
+            const mk = `${todayPrefix}${_p2(h)}:${_p2(min)}`;
+            const e  = phaseMinAgg[phase]?.[param]?.[mk];
+            if (e && e.count > 0) { sum += e.sum / e.count; count++; }
         }
+        values.push(count > 0 ? parseFloat((sum / count).toFixed(4)) : null);
     }
     return { labels, values };
 }
 
+// 7-day bar chart view (Week filter)
 function getDayViewData(phase, param) {
     const now = new Date();
     const labels = [], values = [];
@@ -728,9 +714,9 @@ function _startAggRebuild() {
     if (_aggRebuildId) { clearInterval(_aggRebuildId); _aggRebuildId = null; }
     if (timeFilter === 'all') return;
 
-    const intervalMs = timeFilter === 'minute' ? 5_000
-                     : timeFilter === 'hour'   ? 30_000
-                     :                           60_000;
+    // Day view refreshes every 30s to update 30-min slot averages
+    // Week view refreshes every 60s to update daily averages
+    const intervalMs = timeFilter === 'day' ? 30_000 : 60_000;
 
     _aggRebuildId = setInterval(() => {
         if (timeFilter !== 'all' && realtimeChart) {
@@ -752,10 +738,16 @@ function _checkTimeWindowChange() {
     const h   = now.getHours();
     const day = now.getDate();
 
-    if (timeFilter === 'minute') {
-        if (_lastChartHour !== -1 && h !== _lastChartHour) {
+    if (timeFilter === 'day') {
+        // Rebuild if day changes (midnight rollover)
+        if (_lastChartDay !== -1 && day !== _lastChartDay) {
             _rebuildChart();
-        } else if (_lastChartMinute !== -1 && m !== _lastChartMinute && realtimeChart) {
+        } else if (
+            _lastChartMinute !== -1 &&
+            Math.floor(m / 30) !== Math.floor(_lastChartMinute / 30) &&
+            realtimeChart
+        ) {
+            // Update when crossing 30-min boundary
             const { labels, datasets } = getAllPhaseDatasets();
             realtimeChart.data.labels = labels;
             datasets.forEach((ds, i) => {
@@ -765,7 +757,7 @@ function _checkTimeWindowChange() {
             while (realtimeChart.data.datasets.length > datasets.length) realtimeChart.data.datasets.pop();
             realtimeChart.update('none');
         }
-    } else if (timeFilter === 'hour' || timeFilter === 'day') {
+    } else if (timeFilter === 'week') {
         if (_lastChartDay !== -1 && day !== _lastChartDay) {
             _rebuildChart();
         }
@@ -787,10 +779,9 @@ function startTimeWindowMonitoring() {
 }
 
 function getAggregatedDataForPhase(phase, param) {
-    if (timeFilter === 'all')    return { labels: chartLabels, values: phaseChartData[phase]?.[param] || [] };
-    if (timeFilter === 'minute') return getMinViewData(phase, param);
-    if (timeFilter === 'hour')   return getHourViewData(phase, param);
-    /* day */                    return getDayViewData(phase, param);
+    if (timeFilter === 'all')  return { labels: chartLabels, values: phaseChartData[phase]?.[param] || [] };
+    if (timeFilter === 'day')  return get30MinViewData(phase, param);
+    /* week */                 return getDayViewData(phase, param);
 }
 
 function getAllPhaseDatasets() {
@@ -803,14 +794,16 @@ function getAllPhaseDatasets() {
     const dayPhases = Object.keys(phaseDayAgg)
         .filter(p => /^L\d+$/.test(p) && enabledKeys.includes(p));
 
-    const allPhases = timeFilter === 'day'
+    // Week = bar chart, Day = area chart, All = area chart
+    const isBar = timeFilter === 'week';
+
+    const allPhases = timeFilter === 'week'
         ? [...new Set([...phases, ...dayPhases])]
               .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)))
         : phases;
 
     if (!allPhases.length) return { labels: [], datasets: [] };
 
-    const isBar  = timeFilter === 'day' || timeFilter === 'hour';
     const labels = getAggregatedDataForPhase(allPhases[0], selectedParameter).labels;
 
     const datasets = allPhases.map(phase => {
@@ -860,17 +853,17 @@ function initChart() {
     const ctx = $('realtimeChart');
     if (!ctx) return;
 
-    const info    = PARAM_INFO[selectedParameter];
-    const isBar   = timeFilter === 'day' || timeFilter === 'hour';
-    const now     = new Date();
-    const hStr    = String(now.getHours()).padStart(2, '0');
+    const info  = PARAM_INFO[selectedParameter];
+    // Week = bar, Day/All = line+area
+    const isBar = timeFilter === 'week';
+    const now   = new Date();
+
     const xTitles = {
-        all:    '',
-        minute: `${hStr}:00 — ${hStr}:59`,
-        hour:   now.toLocaleDateString('id-ID', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }),
-        day:    '7 Hari Terakhir',
+        all:  '',
+        day:  now.toLocaleDateString('id-ID', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }),
+        week: '7 Hari Terakhir',
     };
-    const unitLabel   = info.unit ? `${info.label} (${info.unit})` : info.label;
+    const unitLabel = info.unit ? `${info.label} (${info.unit})` : info.label;
 
     let initLabels, initDatasets;
     if (timeFilter === 'all') {
@@ -912,7 +905,10 @@ function initChart() {
     }
 
     const { yMin, yMax } = getYBoundsMulti(initDatasets, selectedParameter);
-    const maxTicksMap = { all: 10, minute: 10, hour: 12, day: 7 };
+    // Day: 48 slots (every 30min), show every 2h = 4 ticks → maxTicksLimit 12
+    // Week: 7 bars
+    // All: 10 ticks
+    const maxTicksMap = { all: 10, day: 12, week: 7 };
 
     realtimeChart = new Chart(ctx, {
         type: isBar ? 'bar' : 'line',
@@ -988,7 +984,7 @@ function initChart() {
                     display: true,
                     border:  { display: false },
                     title: {
-                        display: !!xTitles[timeFilter],
+                        display: !!(xTitles[timeFilter]),
                         text:    xTitles[timeFilter] || '',
                         font:    { size: 10, weight: '600', family: "'DM Sans','Segoe UI',sans-serif" },
                         color:   '#9CA3AF',
@@ -1055,7 +1051,6 @@ let _chartBufferRef  = null;
 let _chartInitialLoad = false;
 
 function _attachChartBufferListener(deviceId) {
-    // Detach any existing listener
     if (_chartBufferRef) {
         _chartBufferRef.off();
         _chartBufferRef = null;
@@ -1064,7 +1059,6 @@ function _attachChartBufferListener(deviceId) {
     _chartInitialLoad = false;
     resetChartData();
 
-    // Step 1: Load last 300 historical points once
     database.ref(`devices/${deviceId}/ChartBuffer`)
         .orderByKey()
         .limitToLast(MAX_DATA_POINTS)
@@ -1079,7 +1073,6 @@ function _attachChartBufferListener(deviceId) {
             _chartInitialLoad = true;
             console.log(`[ChartBuffer] Loaded ${chartLabels.length} historical points`);
 
-            // Step 2: After initial load, listen only for NEW points
             const nowKey = `p${Date.now()}`;
             _chartBufferRef = database.ref(`devices/${deviceId}/ChartBuffer`)
                 .orderByKey()
@@ -1088,7 +1081,6 @@ function _attachChartBufferListener(deviceId) {
             _chartBufferRef.on('child_added', snap => {
                 _appendChartPoint(snap.val());
 
-                // Update aggregation in real time
                 const raw = _rebuildRawFromPoint(snap.val());
                 if (raw) accumulatePoint(raw);
 
@@ -1098,10 +1090,6 @@ function _attachChartBufferListener(deviceId) {
         });
 }
 
-/**
- * Reconstruct a raw phase object from a ChartBuffer point
- * so accumulatePoint() can process it correctly.
- */
 function _rebuildRawFromPoint(point) {
     if (!point) return null;
     const phases = Object.keys(point).filter(k => /^L\d+$/.test(k));
@@ -1111,9 +1099,6 @@ function _rebuildRawFromPoint(point) {
     return raw;
 }
 
-/**
- * Append a single ChartBuffer point into the in-memory buffers.
- */
 function _appendChartPoint(point) {
     if (!point || !point.ts) return;
 
@@ -1142,7 +1127,6 @@ function _appendChartPoint(point) {
         phaseChartData[phase].powerFactor.push(fv(pd, 'Power Factor'));
     });
 
-    // Enforce MAX_DATA_POINTS cap
     if (chartLabels.length > MAX_DATA_POINTS) {
         chartLabels.shift();
         chartTimestamps.shift();
@@ -1152,11 +1136,8 @@ function _appendChartPoint(point) {
     }
 }
 
-// ── updateChart — kept for display cards; no longer feeds chart buffer ────────
 function updateChart(raw) {
-    // Chart data now comes from Firebase ChartBuffer listener (_attachChartBufferListener)
-    // This function is intentionally left empty to prevent double-feeding.
-    // Display cards are updated in _attachRealtimeListener directly.
+    // Chart data fed by Firebase ChartBuffer listener — intentionally empty.
 }
 
 function changeParameter() { _switchParameter(DOM.paramSelect?.value); }
@@ -1384,7 +1365,6 @@ async function onDeviceChange(deviceId) {
         database.ref(`devices/${_prevDeviceId}/meta/name`).off();
         database.ref(`devices/${_prevDeviceId}/meta/sensors`).off();
     }
-    // Detach chart buffer listener
     if (_chartBufferRef) { _chartBufferRef.off(); _chartBufferRef = null; }
 
     selectedDeviceId   = deviceId;
@@ -1534,7 +1514,6 @@ async function togglePhaseEnabled(deviceId, phase, enabled) {
 function _attachRealtimeListener(deviceId) {
     _prevDeviceId = deviceId;
 
-    // Attach chart buffer listener for synchronized chart across all clients
     _attachChartBufferListener(deviceId);
 
     let _firstSnap = true;
@@ -1564,15 +1543,12 @@ function _attachRealtimeListener(deviceId) {
         realtimeData      = data;
         isConnected       = true;
 
-        // Update display cards for the selected phase
         if (selectedPhase) {
             const displayData = getPhaseDisplayData(raw, selectedPhase);
             if (displayData) updateDisplayCards(displayData);
             else updateDisplayCardsBlank();
         }
 
-        // NOTE: updateChart(raw) intentionally NOT called here.
-        // Chart data is fed by _attachChartBufferListener via Firebase ChartBuffer.
         updateConnectionStatus(true);
     }, () => updateConnectionStatus(false));
 }
@@ -2338,7 +2314,6 @@ async function setCaptureInterval() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
-    // Chart will be populated by Firebase ChartBuffer, not localStorage
     initChart();
 
     DOM.paramSelect?.addEventListener('change', changeParameter);
@@ -2364,6 +2339,5 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 window.addEventListener('beforeunload', () => {
     if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
-    // Detach Firebase listener on unload
     if (_chartBufferRef) { _chartBufferRef.off(); _chartBufferRef = null; }
 });

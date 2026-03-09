@@ -82,10 +82,9 @@
                 <!-- Metric Cards Column with Phase Selector -->
                 <div class="metrics-col-wrap">
 
-                    <!-- Phase Selector — only phase buttons, no "Semua" -->
+                    <!-- Phase Selector -->
                     <div class="phase-selector" id="phaseSelector">
                         <div class="phase-btn-group" id="phaseSelectorBtns">
-                            <!-- Injected dynamically by JS — no hardcoded "Semua" button -->
                         </div>
                     </div>
 
@@ -165,10 +164,9 @@
                             <div class="chart-header-right">
                                 <div class="time-filter-row">
                                     <div class="time-filter-group">
-                                        <button class="time-filter-btn active" data-filter="all"    onclick="setTimeFilter('all')">All</button>
-                                        <button class="time-filter-btn"        data-filter="day"    onclick="setTimeFilter('day')">Day</button>
-                                        <button class="time-filter-btn"        data-filter="hour"   onclick="setTimeFilter('hour')">Hour</button>
-                                        <button class="time-filter-btn"        data-filter="minute" onclick="setTimeFilter('minute')">Min</button>
+                                        <button class="time-filter-btn active" data-filter="all"  onclick="setTimeFilter('all')">All</button>
+                                        <button class="time-filter-btn"        data-filter="week" onclick="setTimeFilter('week')">Week</button>
+                                        <button class="time-filter-btn"        data-filter="day"  onclick="setTimeFilter('day')">Day</button>
                                     </div>
                                 </div>
                                 <div class="chart-controls">
