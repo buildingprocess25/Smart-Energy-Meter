@@ -1,1 +1,40 @@
-{}
+{
+  "docType": "1",
+  "editorVersion": "6.5.0",
+  "title": "ESP32_PZEM_EnergyMonitor",
+  "description": "Compact PCB using ESP32 + PZEM + HLK-10M05",
+  "components": [
+    {
+      "type": "ESP32",
+      "name": "ESP32-WROOM-32",
+      "pins": ["3V3","GND","TX2","RX2","EN","IO0"]
+    },
+    {
+      "type": "ACDC",
+      "name": "HLK-10M05",
+      "pins": ["AC_L","AC_N","VOUT","GND"]
+    },
+    {
+      "type": "ENERGY_METER",
+      "name": "PZEM-004T",
+      "pins": ["VCC","GND","TX","RX","CT+","CT-"]
+    },
+    {
+      "type": "REGULATOR",
+      "name": "AMS1117-3.3",
+      "pins": ["VIN","VOUT","GND"]
+    }
+  ],
+  "nets": [
+    {"name":"5V","nodes":["HLK-10M05.VOUT","PZEM-004T.VCC","AMS1117.VIN"]},
+    {"name":"3V3","nodes":["AMS1117.VOUT","ESP32.3V3"]},
+    {"name":"GND","nodes":["HLK-10M05.GND","ESP32.GND","PZEM-004T.GND"]},
+    {"name":"UART_TX","nodes":["ESP32.TX2","PZEM-004T.RX"]},
+    {"name":"UART_RX","nodes":["ESP32.RX2","PZEM-004T.TX"]}
+  ],
+  "board": {
+    "width": 60,
+    "height": 50,
+    "layers": 2
+  }
+}

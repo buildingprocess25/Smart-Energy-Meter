@@ -20,22 +20,27 @@ let dbSearchQuery = '';
 let _renamingDeviceId = null;
 let selectedPhase = '';
 
+let hourlyFirebaseData = {};
+let _hourlyListenerAttached = null;
+
+let dayFirebaseData = {};
+let _dayListenerAttached = null;
+
 let realtimeChart = null;
 let selectedParameter = 'voltage';
 let timeFilter = 'all';
-let _userIsZoomed   = false;
-let _visiblePoints  = 150;
+let _userIsZoomed = false;
+let _visiblePoints = 300;
 
-const MAX_DATA_POINTS = 300;
-const CHART_STORAGE_KEY = 'sem_chartdata_v3';
+const MAX_DATA_POINTS = 600;
 const PARAM_KEYS = ['voltage', 'current', 'power', 'frequency', 'energy', 'powerFactor'];
 
 let phaseChartData = {};
 let chartLabels = [];
 let chartTimestamps = [];
 
-let _rafId      = null;
-let _rafDirty   = false;
+let _rafId = null;
+let _rafDirty = false;
 let _pageVisible = !document.hidden;
 
 document.addEventListener('visibilitychange', () => {
@@ -49,7 +54,7 @@ function _scheduleRender() {
 }
 
 function _doRender() {
-    _rafId    = null;
+    _rafId = null;
     _rafDirty = false;
     if (!realtimeChart || !_pageVisible || timeFilter !== 'all') return;
 
@@ -63,22 +68,33 @@ function _doRender() {
     if (total === 0) return;
 
     const visible = Math.min(_visiblePoints, total);
-    const start   = total - visible;
+    const start = total - visible;
 
     realtimeChart.data.labels = chartLabels.slice(start);
+
+    const slicedDatasets = [];
     phases.forEach((phase, i) => {
         const values = phaseChartData[phase]?.[selectedParameter] || [];
+        const sliced = values.slice(start);
         const ds = realtimeChart.data.datasets[i];
-        if (ds) ds.data = values.slice(start);
+        if (ds) ds.data = sliced;
+        slicedDatasets.push({ data: sliced });
     });
+
+    const { yMin, yMax } = getYBoundsMulti(slicedDatasets, selectedParameter);
+    realtimeChart.options.scales.y.min = yMin;
+    realtimeChart.options.scales.y.max = yMax;
 
     realtimeChart.update('none');
 }
 
-// ── Debounced chart rebuild ────────────────────────────────────────────────────
 let _rebuildTimer = null;
-function _rebuildChart() {
+let _chartEntryAnimate = false;
+let _clipPathCleanupId = null;
+
+function _rebuildChart(animate = false) {
     if (_rebuildTimer) clearTimeout(_rebuildTimer);
+    _chartEntryAnimate = animate;
     _rebuildTimer = setTimeout(() => {
         _rebuildTimer = null;
         if (realtimeChart) { realtimeChart.destroy(); realtimeChart = null; }
@@ -87,20 +103,18 @@ function _rebuildChart() {
     }, 80);
 }
 
-// ── Time-window auto-refresh tracking ─────────────────────────────────────────
-let _lastChartMinute  = -1;
-let _lastChartHour    = -1;
-let _lastChartDay     = -1;
+let _lastChartMinute = -1;
+let _lastChartHour = -1;
+let _lastChartDay = -1;
 let _timeWindowCheckId = null;
-let _aggRebuildId     = null;
+let _aggRebuildId = null;
 
-// iSolarCloud-style color palette
 const PHASE_COLORS = [
-    { line: '#1677FF', bar: 'rgba(22,119,255,0.75)',  light: 'rgba(22,119,255,0.18)'  },
-    { line: '#FF6B35', bar: 'rgba(255,107,53,0.75)',   light: 'rgba(255,107,53,0.18)'  },
-    { line: '#52C41A', bar: 'rgba(82,196,26,0.75)',    light: 'rgba(82,196,26,0.18)'   },
-    { line: '#7B61FF', bar: 'rgba(123,97,255,0.75)',   light: 'rgba(123,97,255,0.18)'  },
-    { line: '#FF4D4F', bar: 'rgba(255,77,79,0.75)',    light: 'rgba(255,77,79,0.18)'   },
+    { line: '#1677FF', bar: 'rgba(22,119,255,0.75)', light: 'rgba(22,119,255,0.18)' },
+    { line: '#FF6B35', bar: 'rgba(255,107,53,0.75)', light: 'rgba(255,107,53,0.18)' },
+    { line: '#52C41A', bar: 'rgba(82,196,26,0.75)', light: 'rgba(82,196,26,0.18)' },
+    { line: '#7B61FF', bar: 'rgba(123,97,255,0.75)', light: 'rgba(123,97,255,0.18)' },
+    { line: '#FF4D4F', bar: 'rgba(255,77,79,0.75)', light: 'rgba(255,77,79,0.18)' },
 ];
 
 function getPhaseColors(phase) {
@@ -108,14 +122,13 @@ function getPhaseColors(phase) {
     return PHASE_COLORS[Math.min(idx, PHASE_COLORS.length - 1)] || PHASE_COLORS[0];
 }
 
-// ── iSolarCloud Chart Helpers ─────────────────────────────────────────────────
 function createAreaGradient(ctx, chartArea, color) {
     const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
     const base = color.replace('rgba(', '').replace(')', '').split(',');
     const r = base[0].trim(), g = base[1].trim(), b = base[2].trim();
-    gradient.addColorStop(0,   `rgba(${r},${g},${b},0.32)`);
+    gradient.addColorStop(0, `rgba(${r},${g},${b},0.32)`);
     gradient.addColorStop(0.5, `rgba(${r},${g},${b},0.10)`);
-    gradient.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+    gradient.addColorStop(1, `rgba(${r},${g},${b},0)`);
     return gradient;
 }
 
@@ -124,24 +137,24 @@ const crosshairPlugin = {
     afterDraw(chart) {
         const active = chart.tooltip?._active;
         if (!active?.length) return;
-        const ctx        = chart.ctx;
-        const x          = active[0].element.x;
+        const ctx = chart.ctx;
+        const x = active[0].element.x;
         const { top, bottom } = chart.chartArea;
         ctx.save();
         ctx.beginPath();
         ctx.moveTo(x, top);
         ctx.lineTo(x, bottom);
-        ctx.lineWidth   = 1;
+        ctx.lineWidth = 1;
         ctx.strokeStyle = 'rgba(100,116,139,0.4)';
         ctx.setLineDash([4, 4]);
         ctx.stroke();
-        if (timeFilter === 'all' || timeFilter === 'day') {
+        if (timeFilter === 'all') {
             active.forEach(pt => {
                 ctx.beginPath();
                 ctx.arc(pt.element.x, pt.element.y, 4, 0, Math.PI * 2);
-                ctx.fillStyle   = pt.element.options?.borderColor || '#1677FF';
+                ctx.fillStyle = pt.element.options?.borderColor || '#1677FF';
                 ctx.strokeStyle = '#fff';
-                ctx.lineWidth   = 2;
+                ctx.lineWidth = 2;
                 ctx.setLineDash([]);
                 ctx.fill();
                 ctx.stroke();
@@ -153,7 +166,6 @@ const crosshairPlugin = {
 
 Chart.register(crosshairPlugin);
 
-// ── Draggable tooltip state ───────────────────────────────────────────────────
 const _ttDrag = { active: false, offX: 0, offY: 0, pinned: false };
 
 function _initTooltipDrag(el) {
@@ -171,9 +183,9 @@ function _initTooltipDrag(el) {
         if (e.button !== 0) return;
         _ttDrag.active = true;
         _ttDrag.pinned = false;
-        _ttDrag.offX   = e.clientX - parseFloat(el.style.left || 0);
-        _ttDrag.offY   = e.clientY - parseFloat(el.style.top  || 0);
-        el.style.cursor     = 'grabbing';
+        _ttDrag.offX = e.clientX - parseFloat(el.style.left || 0);
+        _ttDrag.offY = e.clientY - parseFloat(el.style.top || 0);
+        el.style.cursor = 'grabbing';
         el.style.transition = 'none';
         el.style.userSelect = 'none';
         e.stopPropagation();
@@ -184,7 +196,7 @@ function _initTooltipDrag(el) {
         if (!_ttDrag.active) return;
         _ttDrag.pinned = true;
         el.style.left = (e.clientX - _ttDrag.offX) + 'px';
-        el.style.top  = (e.clientY - _ttDrag.offY) + 'px';
+        el.style.top = (e.clientY - _ttDrag.offY) + 'px';
     });
 
     document.addEventListener('mouseup', () => {
@@ -207,22 +219,22 @@ function iSolarTooltipHandler(context) {
 
     if (tooltip.opacity === 0) {
         if (_ttDrag.active || _ttDrag.pinned) return;
-        el.style.opacity       = '0';
+        el.style.opacity = '0';
         el.style.pointerEvents = 'none';
-        _ttDrag.pinned         = false;
+        _ttDrag.pinned = false;
         return;
     }
 
-    const info  = PARAM_INFO[selectedParameter];
+    const info = PARAM_INFO[selectedParameter];
     const title = tooltip.title?.[0] || '';
-    let html    = `<div class="isc-tt-header"><span class="isc-tt-clock">🕐</span><span>${title}</span></div><div class="isc-tt-rows">`;
+    let html = `<div class="isc-tt-header"><span class="isc-tt-clock">🕐</span><span>${title}</span></div><div class="isc-tt-rows">`;
 
     (tooltip.dataPoints || []).forEach(dp => {
-        const val    = dp.parsed.y;
-        const color  = dp.dataset.borderColor || dp.dataset.backgroundColor;
-        const label  = dp.dataset.label;
-        const disp   = val != null ? val.toFixed(2) : '—';
-        const unit   = info.unit || '';
+        const val = dp.parsed.y;
+        const color = dp.dataset.borderColor || dp.dataset.backgroundColor;
+        const label = dp.dataset.label;
+        const disp = val != null ? val.toFixed(2) : '—';
+        const unit = info.unit || '';
         html += `<div class="isc-tt-row">
             <span class="isc-tt-dot" style="background:${color}"></span>
             <span class="isc-tt-label">${label}</span>
@@ -233,30 +245,30 @@ function iSolarTooltipHandler(context) {
     el.innerHTML = html;
 
     const rect = chart.canvas.getBoundingClientRect();
-    const cx   = tooltip.caretX;
-    const cy   = tooltip.caretY;
-    const ttW  = el.offsetWidth  || 190;
-    const ttH  = el.offsetHeight || 80;
+    const cx = tooltip.caretX;
+    const cy = tooltip.caretY;
+    const ttW = el.offsetWidth || 190;
+    const ttH = el.offsetHeight || 80;
 
     let left, top;
     if (timeFilter === 'week') {
-        left = rect.right  + window.scrollX - ttW - 12;
-        top  = rect.top    + window.scrollY + 8;
+        left = rect.right + window.scrollX - ttW - 12;
+        top = rect.top + window.scrollY + 8;
     } else {
-        const spaceR   = rect.width - cx;
+        const spaceR = rect.width - cx;
         const leftBase = spaceR > ttW + 24 ? cx + 16 : cx - ttW - 16;
-        let topBase    = cy - ttH / 2;
-        topBase        = Math.max(4, Math.min(topBase, rect.height - ttH - 4));
+        let topBase = cy - ttH / 2;
+        topBase = Math.max(4, Math.min(topBase, rect.height - ttH - 4));
         left = rect.left + window.scrollX + leftBase;
-        top  = rect.top  + window.scrollY + topBase;
+        top = rect.top + window.scrollY + topBase;
     }
 
-    el.style.opacity       = '1';
-    el.style.transform     = 'translateY(0)';
+    el.style.opacity = '1';
+    el.style.transform = 'translateY(0)';
     el.style.pointerEvents = 'auto';
     if (!_ttDrag.pinned) {
         el.style.left = left + 'px';
-        el.style.top  = top  + 'px';
+        el.style.top = top + 'px';
     }
 }
 
@@ -264,7 +276,7 @@ function hideIscTooltip() {
     const el = document.getElementById('isc-tooltip');
     if (!el) return;
     if (_ttDrag.active || _ttDrag.pinned) return;
-    el.style.opacity       = '0';
+    el.style.opacity = '0';
     el.style.pointerEvents = 'none';
 }
 
@@ -274,22 +286,20 @@ function getPhaseLabel(phase) {
     return phaseObj?.name && phaseObj.name !== phase ? `${phase} (${phaseObj.name})` : phase;
 }
 
-// ── DOM Cache ─────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const DOM = {
-    get statusDot()      { return $('statusDot'); },
-    get statusText()     { return $('statusText'); },
-    get lastUpdate()     { return $('lastUpdate'); },
-    get captureBtn()     { return $('captureBtn'); },
-    get historyBody()    { return $('historyTableBody'); },
-    get historyCount()   { return $('historyCount'); },
-    get deviceList()     { return $('deviceList'); },
-    get deviceSelect()   { return $('deviceSelect'); },
-    get paramSelect()    { return $('parameterSelect'); },
-    get intervalDisplay(){ return $('intervalDisplay'); },
+    get statusDot() { return $('statusDot'); },
+    get statusText() { return $('statusText'); },
+    get lastUpdate() { return $('lastUpdate'); },
+    get captureBtn() { return $('captureBtn'); },
+    get historyBody() { return $('historyTableBody'); },
+    get historyCount() { return $('historyCount'); },
+    get deviceList() { return $('deviceList'); },
+    get deviceSelect() { return $('deviceSelect'); },
+    get paramSelect() { return $('parameterSelect'); },
+    get intervalDisplay() { return $('intervalDisplay'); },
 };
 
-// ── Utilities ─────────────────────────────────────────────────────────────────
 function resetChartData() { phaseChartData = {}; chartLabels = []; chartTimestamps = []; resetAggData(); }
 
 function _detectPhaseKeys(raw) {
@@ -319,26 +329,26 @@ function normalizeFirebaseData(raw) {
 
     const voltages = phases.map(p => getVal(p, 'Voltage (V)'));
     const currents = phases.map(p => getVal(p, 'Current (A)'));
-    const powers   = phases.map(p => getVal(p, 'Power (W)'));
-    const freqs    = phases.map(p => getVal(p, 'Frequency (Hz)'));
+    const powers = phases.map(p => getVal(p, 'Power (W)'));
+    const freqs = phases.map(p => getVal(p, 'Frequency (Hz)'));
     const energies = phases.map(p => getVal(p, 'Active Energy (kWh)'));
-    const pfs      = phases.map(p => getVal(p, 'Power Factor'));
+    const pfs = phases.map(p => getVal(p, 'Power Factor'));
 
     const sum = arr => arr.reduce((a, b) => a + b, 0);
     const activePhases = voltages.filter(v => v > 0).length;
     const denom = activePhases > 0 ? activePhases : 1;
 
     return {
-        Voltage:        sum(voltages)  / denom,
-        Current:        sum(currents),
-        Power:          sum(powers),
-        Frequency:      sum(freqs)     / denom,
-        Apparent:       phases.reduce((s, p) => s + getVal(p, 'Apparent Power (kVA)'), 0),
-        Reactive:       phases.reduce((s, p) => s + getVal(p, 'Reactive Power (kVAR)'), 0),
-        Energy:         sum(energies),
-        PowerFactor:    sum(pfs)       / denom,
-        Phase1:         getVal(phases[0], 'Phase Angle (°)'),
-        EnergyApparent: phases.reduce((s, p) => s + getVal(p, 'Apparent Energy (kVAh)'),  0),
+        Voltage: sum(voltages) / denom,
+        Current: sum(currents),
+        Power: sum(powers),
+        Frequency: sum(freqs) / denom,
+        Apparent: phases.reduce((s, p) => s + getVal(p, 'Apparent Power (kVA)'), 0),
+        Reactive: phases.reduce((s, p) => s + getVal(p, 'Reactive Power (kVAR)'), 0),
+        Energy: sum(energies),
+        PowerFactor: sum(pfs) / denom,
+        Phase1: getVal(phases[0], 'Phase Angle (°)'),
+        EnergyApparent: phases.reduce((s, p) => s + getVal(p, 'Apparent Energy (kVAh)'), 0),
         EnergyReactive: phases.reduce((s, p) => s + getVal(p, 'Reactive Energy (kVARh)'), 0),
         DeviceTimestamp: raw.Timestamp || '',
         _phases: phases,
@@ -353,22 +363,21 @@ function getPhaseDisplayData(raw, phase) {
     const f = key => { try { return parseFloat(phaseData[key] || 0) || 0; } catch (_) { return 0; } };
 
     return {
-        Voltage:        f('Voltage (V)'),
-        Current:        f('Current (A)'),
-        Power:          f('Power (W)'),
-        Frequency:      f('Frequency (Hz)'),
-        Energy:         f('Active Energy (kWh)'),
-        PowerFactor:    f('Power Factor'),
-        Apparent:       f('Apparent Power (kVA)'),
-        Reactive:       f('Reactive Power (kVAR)'),
-        Phase1:         f('Phase Angle (°)'),
+        Voltage: f('Voltage (V)'),
+        Current: f('Current (A)'),
+        Power: f('Power (W)'),
+        Frequency: f('Frequency (Hz)'),
+        Energy: f('Active Energy (kWh)'),
+        PowerFactor: f('Power Factor'),
+        Apparent: f('Apparent Power (kVA)'),
+        Reactive: f('Reactive Power (kVAR)'),
+        Phase1: f('Phase Angle (°)'),
         EnergyApparent: f('Apparent Energy (kVAh)'),
         EnergyReactive: f('Reactive Energy (kVARh)'),
         _phases: [phase],
     };
 }
 
-// ── Phase Selector ────────────────────────────────────────────────────────────
 function setPhase(phase) {
     selectedPhase = phase;
     document.querySelectorAll('.phase-btn').forEach(btn => {
@@ -404,25 +413,24 @@ function updatePhaseSelector(phases) {
     }).join('');
 }
 
-// ── 3-Level Cascade Aggregation ───────────────────────────────────────────────
 const _p2 = v => String(v).padStart(2, '0');
 
-function _minKey(ts)  { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}T${_p2(d.getHours())}:${_p2(d.getMinutes())}`; }
+function _minKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}T${_p2(d.getHours())}:${_p2(d.getMinutes())}`; }
 function _hourKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}T${_p2(d.getHours())}`; }
-function _dayKey(ts)  { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}`; }
+function _dayKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}`; }
 
-let phaseMinAgg  = {};
+let phaseMinAgg = {};
 let phaseHourAgg = {};
-let phaseDayAgg  = {};
+let phaseDayAgg = {};
 
-let _prevMinKey  = '';
+let _prevMinKey = '';
 let _prevHourKey = '';
-let _prevDayKey  = '';
+let _prevDayKey = '';
 
 function _ensureAgg(agg, phase, param, key) {
-    if (!agg[phase])              agg[phase]              = {};
-    if (!agg[phase][param])       agg[phase][param]       = {};
-    if (!agg[phase][param][key])  agg[phase][param][key]  = { sum: 0, count: 0 };
+    if (!agg[phase]) agg[phase] = {};
+    if (!agg[phase][param]) agg[phase][param] = {};
+    if (!agg[phase][param][key]) agg[phase][param][key] = { sum: 0, count: 0 };
 }
 
 function _avgOf(agg, phase, param, key) {
@@ -432,11 +440,11 @@ function _avgOf(agg, phase, param, key) {
 
 function accumulatePoint(raw) {
     if (!raw) return;
-    const now     = Date.now();
-    const minKey  = _minKey(now);
+    const now = Date.now();
+    const minKey = _minKey(now);
     const hourKey = _hourKey(now);
-    const dayKey  = _dayKey(now);
-    const phases  = _detectPhaseKeys(raw);
+    const dayKey = _dayKey(now);
+    const phases = _detectPhaseKeys(raw);
 
     if (_prevMinKey && _prevMinKey !== minKey) {
         phases.forEach(phase => {
@@ -445,7 +453,7 @@ function accumulatePoint(raw) {
                 if (avg === null) return;
                 const hk = _prevHourKey || hourKey;
                 _ensureAgg(phaseHourAgg, phase, param, hk);
-                phaseHourAgg[phase][param][hk].sum   += avg;
+                phaseHourAgg[phase][param][hk].sum += avg;
                 phaseHourAgg[phase][param][hk].count += 1;
             });
         });
@@ -458,31 +466,31 @@ function accumulatePoint(raw) {
                 if (avg === null) return;
                 const dk = _prevDayKey || dayKey;
                 _ensureAgg(phaseDayAgg, phase, param, dk);
-                phaseDayAgg[phase][param][dk].sum   += avg;
+                phaseDayAgg[phase][param][dk].sum += avg;
                 phaseDayAgg[phase][param][dk].count += 1;
             });
         });
         _pruneOldMinAgg();
     }
 
-    _prevMinKey  = minKey;
+    _prevMinKey = minKey;
     _prevHourKey = hourKey;
-    _prevDayKey  = dayKey;
+    _prevDayKey = dayKey;
 
     phases.forEach(phase => {
-        const pd  = raw[phase] || {};
-        const fv  = k => { try { return parseFloat(pd[k] || 0) || 0; } catch (_) { return 0; } };
+        const pd = raw[phase] || {};
+        const fv = k => { try { return parseFloat(pd[k] || 0) || 0; } catch (_) { return 0; } };
         const vals = {
-            voltage:     fv('Voltage (V)'),
-            current:     fv('Current (A)'),
-            power:       fv('Power (W)'),
-            frequency:   fv('Frequency (Hz)'),
-            energy:      fv('Active Energy (kWh)'),
+            voltage: fv('Voltage (V)'),
+            current: fv('Current (A)'),
+            power: fv('Power (W)'),
+            frequency: fv('Frequency (Hz)'),
+            energy: fv('Active Energy (kWh)'),
             powerFactor: fv('Power Factor'),
         };
         PARAM_KEYS.forEach(param => {
             _ensureAgg(phaseMinAgg, phase, param, minKey);
-            phaseMinAgg[phase][param][minKey].sum   += vals[param];
+            phaseMinAgg[phase][param][minKey].sum += vals[param];
             phaseMinAgg[phase][param][minKey].count += 1;
         });
     });
@@ -498,12 +506,12 @@ function _pruneOldMinAgg() {
 }
 
 function resetAggData() {
-    phaseMinAgg  = {};
+    phaseMinAgg = {};
     phaseHourAgg = {};
-    phaseDayAgg  = {};
-    _prevMinKey  = '';
+    phaseDayAgg = {};
+    _prevMinKey = '';
     _prevHourKey = '';
-    _prevDayKey  = '';
+    _prevDayKey = '';
 }
 
 function rebuildCascadeFromRaw() {
@@ -521,7 +529,7 @@ function rebuildCascadeFromRaw() {
                 const v = phaseChartData[phase]?.[param]?.[i];
                 if (v == null || isNaN(v)) return;
                 _ensureAgg(phaseMinAgg, phase, param, mk);
-                phaseMinAgg[phase][param][mk].sum   += v;
+                phaseMinAgg[phase][param][mk].sum += v;
                 phaseMinAgg[phase][param][mk].count += 1;
             });
         });
@@ -537,7 +545,7 @@ function rebuildCascadeFromRaw() {
                 if (!e || e.count === 0) return;
                 const hk = mk.slice(0, 13);
                 _ensureAgg(phaseHourAgg, phase, param, hk);
-                phaseHourAgg[phase][param][hk].sum   += e.sum / e.count;
+                phaseHourAgg[phase][param][hk].sum += e.sum / e.count;
                 phaseHourAgg[phase][param][hk].count += 1;
             });
         });
@@ -553,87 +561,192 @@ function rebuildCascadeFromRaw() {
                 if (!e || e.count === 0) return;
                 const dk = hk.slice(0, 10);
                 _ensureAgg(phaseDayAgg, phase, param, dk);
-                phaseDayAgg[phase][param][dk].sum   += e.sum / e.count;
+                phaseDayAgg[phase][param][dk].sum += e.sum / e.count;
                 phaseDayAgg[phase][param][dk].count += 1;
             });
         });
     });
 
     const now = Date.now();
-    _prevMinKey  = _minKey(now);
+    _prevMinKey = _minKey(now);
     _prevHourKey = _hourKey(now);
-    _prevDayKey  = _dayKey(now);
-
-    console.log('[Cascade] Rebuilt from', chartTimestamps.length, 'raw points.',
-        'Phases:', phases);
+    _prevDayKey = _dayKey(now);
 }
 
-// ── View-data builders ────────────────────────────────────────────────────────
-// 30-minute interval view for current day (Day filter)
-function get30MinViewData(phase, param) {
-    const now         = new Date();
-    const todayPrefix = `${now.getFullYear()}-${_p2(now.getMonth()+1)}-${_p2(now.getDate())}T`;
-    const labels      = [], values = [];
-    const currentSlot = now.getHours() * 2 + (now.getMinutes() >= 30 ? 1 : 0);
-
-    for (let slot = 0; slot < 48; slot++) {
-        const h      = Math.floor(slot / 2);
-        const mStart = (slot % 2) * 30;
-        labels.push(`${_p2(h)}:${_p2(mStart)}`);
-
-        if (slot > currentSlot) { values.push(null); continue; }
-
-        let sum = 0, count = 0;
-        for (let min = mStart; min < mStart + 30; min++) {
-            const mk = `${todayPrefix}${_p2(h)}:${_p2(min)}`;
-            const e  = phaseMinAgg[phase]?.[param]?.[mk];
-            if (e && e.count > 0) { sum += e.sum / e.count; count++; }
-        }
-        values.push(count > 0 ? parseFloat((sum / count).toFixed(4)) : null);
-    }
-    return { labels, values };
-}
-
-// 7-day bar chart view (Week filter)
-function getDayViewData(phase, param) {
+function getHourlyFirebaseData(phase, param) {
     const now = new Date();
+    const todayStr = `${now.getFullYear()}-${_p2(now.getMonth()+1)}-${_p2(now.getDate())}`;
+    const currentHour = now.getHours();
+    const currentMin = Math.floor(now.getMinutes() / 5) * 5;
+
+    const fieldMap = {
+        voltage: 'Voltage',
+        current: 'Current',
+        power: 'Power',
+        frequency: 'Frequency',
+        energy: 'Energy',
+        powerFactor: 'PowerFactor',
+    };
+    const field = fieldMap[param] || 'Voltage';
+
     const labels = [], values = [];
-    for (let i = 6; i >= 0; i--) {
-        const d   = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-        const key = `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}`;
-        labels.push(`${_p2(d.getDate())}/${_p2(d.getMonth()+1)}`);
-        if (i > 0) {
-            values.push(_avgOf(phaseDayAgg, phase, param, key) !== null
-                ? parseFloat(_avgOf(phaseDayAgg, phase, param, key).toFixed(4)) : null);
-        } else {
-            const entry     = phaseDayAgg[phase]?.[param]?.[key] || { sum: 0, count: 0 };
-            const curHourKey = _hourKey(Date.now());
-            const hEntry    = phaseHourAgg[phase]?.[param]?.[curHourKey] || { sum: 0, count: 0 };
-            const curMinKey = _minKey(Date.now());
-            const curMinE   = phaseMinAgg[phase]?.[param]?.[curMinKey];
-            const curMinAvg = curMinE && curMinE.count > 0 ? curMinE.sum / curMinE.count : null;
-            const hSum      = hEntry.sum   + (curMinAvg ?? 0);
-            const hCount    = hEntry.count + (curMinAvg !== null ? 1 : 0);
-            const liveHourAvg = hCount > 0 ? hSum / hCount : null;
-            const totalSum   = entry.sum   + (liveHourAvg ?? 0);
-            const totalCount = entry.count + (liveHourAvg !== null ? 1 : 0);
-            values.push(totalCount > 0 ? parseFloat((totalSum / totalCount).toFixed(4)) : null);
+
+    for (let h = 0; h <= currentHour; h++) {
+        const maxMin = (h === currentHour) ? currentMin : 55;
+        for (let m = 0; m <= maxMin; m += 5) {
+            const key = `${_p2(h)}${_p2(m)}`;
+            const rec = hourlyFirebaseData[phase]?.[key];
+
+            if (rec && rec.date === todayStr) {
+                labels.push(`${_p2(h)}:${_p2(m)}`);
+                const v = rec[field];
+                values.push(v != null ? parseFloat(parseFloat(v).toFixed(4)) : null);
+            }
         }
     }
+
     return { labels, values };
 }
 
-// ── Modal ─────────────────────────────────────────────────────────────────────
+function _attachHourlyListener(deviceId) {
+    if (_hourlyListenerAttached === deviceId) {
+        if (timeFilter === 'day' && realtimeChart) {
+            _refreshDayChartFromFirebase();
+        }
+        return;
+    }
+
+    if (_hourlyListenerAttached) {
+        database.ref(`devices/${_hourlyListenerAttached}/HourlyCapture`).off();
+    }
+    _hourlyListenerAttached = deviceId;
+    hourlyFirebaseData = {};
+
+    database.ref(`devices/${deviceId}/HourlyCapture`).on('value', snap => {
+        hourlyFirebaseData = {};
+        if (snap.exists()) {
+            snap.forEach(phaseSnap => {
+                const phase = phaseSnap.key;
+                if (!/^L\d+$/.test(phase)) return;
+                hourlyFirebaseData[phase] = {};
+                phaseSnap.forEach(hourSnap => {
+                    hourlyFirebaseData[phase][hourSnap.key] = hourSnap.val();
+                });
+            });
+        }
+        if (timeFilter === 'day') {
+            if (realtimeChart) {
+                _refreshDayChartFromFirebase();
+            } else {
+                setTimeout(() => _refreshDayChartFromFirebase(), 200);
+            }
+        }
+    });
+}
+
+function _refreshDayChartFromFirebase() {
+    if (!realtimeChart || timeFilter !== 'day') return;
+    const { labels, datasets } = getAllPhaseDatasets();
+    realtimeChart.data.labels = labels;
+    datasets.forEach((ds, i) => {
+        if (realtimeChart.data.datasets[i]) {
+            realtimeChart.data.datasets[i].data = ds.data;
+        } else {
+            realtimeChart.data.datasets.push(ds);
+        }
+    });
+    while (realtimeChart.data.datasets.length > datasets.length) {
+        realtimeChart.data.datasets.pop();
+    }
+    const { yMin, yMax } = getYBoundsMulti(datasets, selectedParameter);
+    realtimeChart.options.scales.y.min = yMin;
+    realtimeChart.options.scales.y.max = yMax;
+    realtimeChart.update('none');
+}
+
+function _attachDayListener(deviceId) {
+    if (_dayListenerAttached === deviceId) {
+        if (timeFilter === 'week' && realtimeChart) _refreshWeekChartFromFirebase();
+        return;
+    }
+    if (_dayListenerAttached) {
+        database.ref(`devices/${_dayListenerAttached}/DayCapture`).off();
+    }
+    _dayListenerAttached = deviceId;
+    dayFirebaseData = {};
+
+    database.ref(`devices/${deviceId}/DayCapture`).on('value', snap => {
+        dayFirebaseData = {};
+        if (snap.exists()) {
+            snap.forEach(phaseSnap => {
+                const phase = phaseSnap.key;
+                if (!/^L\d+$/.test(phase)) return;
+                dayFirebaseData[phase] = {};
+                phaseSnap.forEach(daySnap => {
+                    dayFirebaseData[phase][daySnap.key] = daySnap.val();
+                });
+            });
+        }
+        if (timeFilter === 'week') {
+            if (realtimeChart) _refreshWeekChartFromFirebase();
+            else setTimeout(() => _refreshWeekChartFromFirebase(), 200);
+        }
+    });
+}
+
+function _refreshWeekChartFromFirebase() {
+    if (!realtimeChart || timeFilter !== 'week') return;
+    const { labels, datasets } = getAllPhaseDatasets();
+    realtimeChart.data.labels = labels;
+    datasets.forEach((ds, i) => {
+        if (realtimeChart.data.datasets[i]) realtimeChart.data.datasets[i].data = ds.data;
+        else realtimeChart.data.datasets.push(ds);
+    });
+    while (realtimeChart.data.datasets.length > datasets.length) realtimeChart.data.datasets.pop();
+    const { yMin, yMax } = getYBoundsMulti(datasets, selectedParameter);
+    realtimeChart.options.scales.y.min = yMin;
+    realtimeChart.options.scales.y.max = yMax;
+    realtimeChart.update('none');
+}
+
+function getDayViewData(phase, param) {
+    const fieldMap = {
+        voltage: 'Voltage', current: 'Current', power: 'Power',
+        frequency: 'Frequency', energy: 'Energy', powerFactor: 'PowerFactor',
+    };
+    const field = fieldMap[param] || 'Voltage';
+    const phaseRec = dayFirebaseData[phase] || {};
+
+    const sortedKeys = Object.keys(phaseRec).sort();
+
+    const labels = [], values = [];
+    sortedKeys.forEach(dateKey => {
+        const rec = phaseRec[dateKey];
+        if (!rec) return;
+        const [, m, d] = dateKey.split('-');
+        labels.push(`${d}/${m}`);
+        const v = rec[field];
+        values.push(v != null ? parseFloat(parseFloat(v).toFixed(4)) : null);
+    });
+    return { labels, values };
+}
+
+function getAggregatedDataForPhase(phase, param) {
+    if (timeFilter === 'all') return { labels: chartLabels, values: phaseChartData[phase]?.[param] || [] };
+    if (timeFilter === 'day') return getHourlyFirebaseData(phase, param);
+    return getDayViewData(phase, param);
+}
+
 const MODAL_ICONS = {
     success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>',
     warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
-    error:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
-    info:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>',
+    error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
+    info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>',
 };
 
 function showModal(title, message, type = 'info', buttons = ['ok']) {
     return new Promise(resolve => {
-        $('modalTitle').textContent   = title;
+        $('modalTitle').textContent = title;
         $('modalMessage').textContent = message;
         const iconEl = $('modalIcon');
         iconEl.className = 'modal-icon ' + type;
@@ -648,7 +761,7 @@ function showModal(title, message, type = 'info', buttons = ['ok']) {
             btnsEl.appendChild(cancelBtn);
         }
         const primaryBtn = document.createElement('button');
-        primaryBtn.className  = 'modal-btn modal-btn-primary';
+        primaryBtn.className = 'modal-btn modal-btn-primary';
         primaryBtn.textContent = buttons.includes('confirm') ? 'YA, LANJUTKAN' : 'OK';
         primaryBtn.onclick = () => { closeModal(); resolve(true); };
         btnsEl.appendChild(primaryBtn);
@@ -662,10 +775,9 @@ function closeModal() {
     document.body.style.overflow = '';
 }
 
-document.addEventListener('click',   e => { if (e.target === $('customModal')) closeModal(); });
+document.addEventListener('click', e => { if (e.target === $('customModal')) closeModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
-// ── Display Cards ─────────────────────────────────────────────────────────────
 const CARD_IDS = ['voltage', 'current', 'power', 'frequency', 'energy', 'powerFactor'];
 const CARD_DEC = { voltage: 1, current: 2, power: 1, frequency: 1, energy: 3, powerFactor: 3 };
 
@@ -686,121 +798,119 @@ function updateDisplayCardsBlank() {
     if (DOM.lastUpdate) DOM.lastUpdate.textContent = '--- Device offline ---';
 }
 
-// ── Chart ─────────────────────────────────────────────────────────────────────
 const PARAM_INFO = {
-    voltage:     { label: 'Voltage',      unit: 'V',   color: '#FFA500', border: '#FF8C00' },
-    current:     { label: 'Current',      unit: 'A',   color: '#0066CC', border: '#0052A3' },
-    power:       { label: 'Power',        unit: 'W',   color: '#00A651', border: '#008040' },
-    frequency:   { label: 'Frequency',    unit: 'Hz',  color: '#6B46C1', border: '#5A3AA0' },
-    energy:      { label: 'Energy',       unit: 'kWh', color: '#00A651', border: '#008040' },
-    powerFactor: { label: 'Power Factor', unit: '',    color: '#6B46C1', border: '#5A3AA0' },
+    voltage: { label: 'Voltage', unit: 'V', color: '#FFA500', border: '#FF8C00' },
+    current: { label: 'Current', unit: 'A', color: '#0066CC', border: '#0052A3' },
+    power: { label: 'Power', unit: 'W', color: '#00A651', border: '#008040' },
+    frequency: { label: 'Frequency', unit: 'Hz', color: '#6B46C1', border: '#5A3AA0' },
+    energy: { label: 'Energy', unit: 'kWh', color: '#00A651', border: '#008040' },
+    powerFactor: { label: 'Power Factor', unit: '', color: '#6B46C1', border: '#5A3AA0' },
 };
 
 function setTimeFilter(filter) {
     timeFilter = filter;
-    _userIsZoomed  = false;
-    _visiblePoints = 150;
+    _userIsZoomed = false;
+    _visiblePoints = 300;
     document.querySelectorAll('.time-filter-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === filter);
     });
     const now = new Date();
     _lastChartMinute = now.getMinutes();
-    _lastChartHour   = now.getHours();
-    _lastChartDay    = now.getDate();
-    _rebuildChart();
+    _lastChartHour = now.getHours();
+    _lastChartDay = now.getDate();
+
+    if (realtimeChart) { realtimeChart.destroy(); realtimeChart = null; }
+
+    if (filter === 'day' && selectedDeviceId) _attachHourlyListener(selectedDeviceId);
+    if (filter === 'week' && selectedDeviceId) _attachDayListener(selectedDeviceId);
+
+    _rebuildChart(true);
 }
 
 function _startAggRebuild() {
     if (_aggRebuildId) { clearInterval(_aggRebuildId); _aggRebuildId = null; }
-    if (timeFilter === 'all') return;
 
-    // Day view refreshes every 30s to update 30-min slot averages
-    // Week view refreshes every 60s to update daily averages
-    const intervalMs = timeFilter === 'day' ? 30_000 : 60_000;
+    if (timeFilter === 'day') {
+        setTimeout(() => _refreshDayChartFromFirebase(), 150);
+        _aggRebuildId = setInterval(() => {
+            if (realtimeChart) _refreshDayChartFromFirebase();
+        }, 30_000);
+        return;
+    }
 
-    _aggRebuildId = setInterval(() => {
-        if (timeFilter !== 'all' && realtimeChart) {
-            const { labels, datasets } = getAllPhaseDatasets();
-            realtimeChart.data.labels = labels;
-            datasets.forEach((ds, i) => {
-                if (realtimeChart.data.datasets[i]) realtimeChart.data.datasets[i].data = ds.data;
-                else realtimeChart.data.datasets.push(ds);
-            });
-            while (realtimeChart.data.datasets.length > datasets.length) realtimeChart.data.datasets.pop();
-            realtimeChart.update('none');
-        }
-    }, intervalMs);
+    if (timeFilter === 'week') {
+        setTimeout(() => _refreshWeekChartFromFirebase(), 150);
+        _aggRebuildId = setInterval(() => {
+            if (realtimeChart) _refreshWeekChartFromFirebase();
+        }, 300_000);
+    }
 }
 
 function _checkTimeWindowChange() {
     const now = new Date();
-    const m   = now.getMinutes();
-    const h   = now.getHours();
+    const m = now.getMinutes();
+    const h = now.getHours();
     const day = now.getDate();
 
     if (timeFilter === 'day') {
-        // Rebuild if day changes (midnight rollover)
         if (_lastChartDay !== -1 && day !== _lastChartDay) {
+            hourlyFirebaseData = {};
             _rebuildChart();
-        } else if (
-            _lastChartMinute !== -1 &&
-            Math.floor(m / 30) !== Math.floor(_lastChartMinute / 30) &&
-            realtimeChart
-        ) {
-            // Update when crossing 30-min boundary
-            const { labels, datasets } = getAllPhaseDatasets();
-            realtimeChart.data.labels = labels;
-            datasets.forEach((ds, i) => {
-                if (realtimeChart.data.datasets[i]) realtimeChart.data.datasets[i].data = ds.data;
-                else realtimeChart.data.datasets.push(ds);
-            });
-            while (realtimeChart.data.datasets.length > datasets.length) realtimeChart.data.datasets.pop();
-            realtimeChart.update('none');
+        }
+        else if (_lastChartMinute !== -1 &&
+                 Math.floor(m / 5) !== Math.floor(_lastChartMinute / 5) &&
+                 realtimeChart) {
+            _refreshDayChartFromFirebase();
         }
     } else if (timeFilter === 'week') {
         if (_lastChartDay !== -1 && day !== _lastChartDay) {
-            _rebuildChart();
+            _refreshWeekChartFromFirebase();
         }
     }
 
     _lastChartMinute = m;
-    _lastChartHour   = h;
-    _lastChartDay    = day;
+    _lastChartHour = h;
+    _lastChartDay = day;
 }
 
 function startTimeWindowMonitoring() {
     if (_timeWindowCheckId) clearInterval(_timeWindowCheckId);
     const now = new Date();
     _lastChartMinute = now.getMinutes();
-    _lastChartHour   = now.getHours();
-    _lastChartDay    = now.getDate();
+    _lastChartHour = now.getHours();
+    _lastChartDay = now.getDate();
     _startAggRebuild();
     _timeWindowCheckId = setInterval(_checkTimeWindowChange, 5_000);
-}
-
-function getAggregatedDataForPhase(phase, param) {
-    if (timeFilter === 'all')  return { labels: chartLabels, values: phaseChartData[phase]?.[param] || [] };
-    if (timeFilter === 'day')  return get30MinViewData(phase, param);
-    /* week */                 return getDayViewData(phase, param);
 }
 
 function getAllPhaseDatasets() {
     const enabledKeys = _getEnabledPhaseKeys();
 
+    const isBar = timeFilter === 'week';
+
     const phases = Object.keys(phaseChartData)
         .filter(p => enabledKeys.includes(p))
         .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
 
-    const dayPhases = Object.keys(phaseDayAgg)
-        .filter(p => /^L\d+$/.test(p) && enabledKeys.includes(p));
+    const dayFbPhases = Object.keys(dayFirebaseData)
+        .filter(p => /^L\d+$/.test(p) && enabledKeys.includes(p))
+        .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
 
-    // Week = bar chart, Day = area chart, All = area chart
-    const isBar = timeFilter === 'week';
+    const hourlyPhases = Object.keys(hourlyFirebaseData)
+        .filter(p => /^L\d+$/.test(p) && enabledKeys.includes(p))
+        .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
 
-    const allPhases = timeFilter === 'week'
-        ? [...new Set([...phases, ...dayPhases])]
-              .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)))
-        : phases;
+    let allPhases;
+    if (timeFilter === 'week') {
+        allPhases = dayFbPhases.length
+            ? dayFbPhases
+            : [...new Set([...phases])].sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+    } else if (timeFilter === 'day') {
+        allPhases = [...new Set([...phases, ...hourlyPhases])]
+            .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+    } else {
+        allPhases = phases;
+    }
 
     if (!allPhases.length) return { labels: [], datasets: [] };
 
@@ -818,33 +928,41 @@ function getAllPhaseDatasets() {
                 return createAreaGradient(ch.ctx, ch.chartArea, colors.light);
             };
 
+        const isDayLine = !isBar && timeFilter === 'day';
+
         return {
-            label:                  getPhaseLabel(phase),
-            data:                   values,
-            borderColor:            colors.line,
-            backgroundColor:        bgFn,
-            borderWidth:            isBar ? 0 : 2.5,
-            tension:                0.38,
+            label: getPhaseLabel(phase),
+            data: values,
+            borderColor: colors.line,
+            backgroundColor: bgFn,
+            borderWidth: isDayLine ? 2 : (isBar ? 0 : 2.5),
+            tension: isDayLine ? 0.4 : 0.38,
             cubicInterpolationMode: 'monotone',
-            spanGaps:               true,
-            fill:                   !isBar,
-            pointRadius:            0,
-            pointHoverRadius:       0,
-            borderRadius:           isBar ? [6, 6, 0, 0] : 0,
-            borderSkipped:          false,
-            ...(isBar ? { barPercentage: 0.55, categoryPercentage: 0.7 } : {}),
+            spanGaps: !isBar,
+            fill: !isBar,
+            pointRadius: isDayLine ? 0 : 0,
+            pointHoverRadius: isDayLine ? 5 : 0,
+            pointBackgroundColor: colors.line,
+            pointBorderColor: '#fff',
+            pointBorderWidth: isDayLine ? 2 : 0,
+            borderRadius: isBar ? [6, 6, 0, 0] : 0,
+            borderSkipped: false,
+            ...(isBar ? {
+                barPercentage: 0.55,
+                categoryPercentage: 0.7,
+            } : {}),
         };
     });
     return { labels, datasets };
 }
 
 function getYBoundsMulti(datasets, param) {
-    const padMap    = { voltage: 3, current: 0.2, power: 10, frequency: 0.2, energy: 0.05, powerFactor: 0.02 };
-    const pad       = padMap[param] ?? 2;
+    const padMap = { voltage: 3, current: 0.2, power: 10, frequency: 0.2, energy: 0.05, powerFactor: 0.02 };
+    const pad = padMap[param] ?? 2;
     const allValues = datasets.flatMap(ds => ds.data).filter(v => v != null && isFinite(v));
     if (!allValues.length) return { yMin: undefined, yMax: undefined };
-    const dataMin   = Math.min(...allValues), dataMax = Math.max(...allValues);
-    const spread    = dataMax - dataMin;
+    const dataMin = Math.min(...allValues), dataMax = Math.max(...allValues);
+    const spread = dataMax - dataMin;
     const actualPad = spread < pad ? pad : spread * 0.08;
     return { yMin: parseFloat((dataMin - actualPad).toFixed(4)), yMax: parseFloat((dataMax + actualPad).toFixed(4)) };
 }
@@ -853,23 +971,22 @@ function initChart() {
     const ctx = $('realtimeChart');
     if (!ctx) return;
 
-    const info  = PARAM_INFO[selectedParameter];
-    // Week = bar, Day/All = line+area
+    const info = PARAM_INFO[selectedParameter];
     const isBar = timeFilter === 'week';
-    const now   = new Date();
+    const now = new Date();
 
     const xTitles = {
-        all:  '',
-        day:  now.toLocaleDateString('id-ID', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }),
+        all: '',
+        day: `Hari ini — ${now.toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })} (Hourly)`,
         week: '7 Hari Terakhir',
     };
     const unitLabel = info.unit ? `${info.label} (${info.unit})` : info.label;
 
     let initLabels, initDatasets;
     if (timeFilter === 'all') {
-        const total   = chartLabels.length;
+        const total = chartLabels.length;
         const visible = Math.min(_visiblePoints, total);
-        const start   = Math.max(0, total - visible);
+        const start = Math.max(0, total - visible);
 
         const enabledKeys = _getEnabledPhaseKeys();
         const phases = Object.keys(phaseChartData)
@@ -881,78 +998,91 @@ function initChart() {
             const colors = getPhaseColors(phase);
             const values = (phaseChartData[phase]?.[selectedParameter] || []).slice(start);
             return {
-                label:                  getPhaseLabel(phase),
-                data:                   values,
-                borderColor:            colors.line,
-                backgroundColor:        (context) => {
+                label: getPhaseLabel(phase),
+                data: values,
+                borderColor: colors.line,
+                backgroundColor: (context) => {
                     const ch = context.chart;
                     if (!ch.chartArea) return colors.light;
                     return createAreaGradient(ch.ctx, ch.chartArea, colors.light);
                 },
-                borderWidth:            2.5,
-                tension:                0.38,
+                borderWidth: 2.5,
+                tension: 0.38,
                 cubicInterpolationMode: 'monotone',
-                spanGaps:               true,
-                fill:                   true,
-                pointRadius:            0,
-                pointHoverRadius:       0,
+                spanGaps: true,
+                fill: true,
+                pointRadius: 0,
+                pointHoverRadius: 0,
             };
         });
     } else {
         const built = getAllPhaseDatasets();
-        initLabels   = built.labels;
+        initLabels = built.labels;
         initDatasets = built.datasets;
     }
 
     const { yMin, yMax } = getYBoundsMulti(initDatasets, selectedParameter);
-    // Day: 48 slots (every 30min), show every 2h = 4 ticks → maxTicksLimit 12
-    // Week: 7 bars
-    // All: 10 ticks
     const maxTicksMap = { all: 10, day: 12, week: 7 };
 
     realtimeChart = new Chart(ctx, {
         type: isBar ? 'bar' : 'line',
         data: { labels: initLabels, datasets: initDatasets },
         options: {
-            responsive:          true,
+            responsive: true,
             maintainAspectRatio: false,
-            interaction:         { intersect: false, mode: 'index' },
-            animation:           false,
-            layout:              { padding: { top: 8, right: 16, bottom: 2, left: 4 } },
+            interaction: { intersect: false, mode: 'index' },
+            animation: isBar && _chartEntryAnimate ? {
+                duration: 650,
+                easing: 'easeOutQuart',
+                onComplete({ chart }) {
+                    chart.options.animation = false;
+                    chart.options.animations = {};
+                },
+            } : false,
+            animations: isBar && _chartEntryAnimate ? {
+                y: {
+                    duration: 650,
+                    easing: 'easeOutQuart',
+                    from(ctx) {
+                        return ctx.chart.scales?.y?.getPixelForValue(0) ?? 0;
+                    },
+                },
+            } : {},
+            layout: { padding: { top: 8, right: 16, bottom: 2, left: 4 } },
             plugins: {
                 legend: {
-                    display:  true,
+                    display: true,
                     position: 'top',
-                    align:    'start',
+                    align: 'start',
                     labels: {
-                        font:            { family: "'DM Sans','Segoe UI',sans-serif", size: 11.5, weight: '600' },
-                        color:           '#374151',
-                        usePointStyle:   true,
-                        pointStyle:      isBar ? 'rectRounded' : 'circle',
+                        font: { family: "'DM Sans','Segoe UI',sans-serif", size: 11.5, weight: '600' },
+                        color: '#374151',
+                        usePointStyle: true,
+                        pointStyle: isBar ? 'rectRounded' : 'circle',
                         pointStyleWidth: 10,
-                        padding:         20,
-                        boxHeight:       8,
+                        padding: 20,
+                        boxHeight: 8,
                         generateLabels(chart) {
                             const orig = Chart.defaults.plugins.legend.labels.generateLabels(chart);
                             return orig.map(item => ({
                                 ...item,
-                                fillStyle:   chart.data.datasets[item.datasetIndex]?.borderColor || item.fillStyle,
+                                fillStyle: chart.data.datasets[item.datasetIndex]?.borderColor || item.fillStyle,
                                 strokeStyle: 'transparent',
                             }));
                         },
                     },
                 },
                 tooltip: {
-                    enabled:   false,
-                    external:  iSolarTooltipHandler,
-                    mode:      'index',
+                    enabled: false,
+                    external: iSolarTooltipHandler,
+                    mode: 'index',
                     intersect: false,
                 },
                 zoom: {
                     zoom: {
-                        wheel:  { enabled: timeFilter !== 'all', speed: 0.08 },
-                        pinch:  { enabled: timeFilter !== 'all' },
-                        mode:   'x',
+                        wheel: { enabled: timeFilter !== 'all', speed: 0.08 },
+                        pinch: { enabled: timeFilter !== 'all' },
+                        mode: 'x',
                         onZoom: ({ chart }) => {
                             if (timeFilter === 'all') {
                                 const { min, max } = chart.scales.x;
@@ -965,8 +1095,8 @@ function initChart() {
                     },
                     pan: {
                         enabled: true,
-                        mode:    'x',
-                        onPan:   ({ chart }) => {
+                        mode: 'x',
+                        onPan: ({ chart }) => {
                             if (timeFilter === 'all') {
                                 const { min, max } = chart.scales.x;
                                 _visiblePoints = Math.max(10, Math.min(MAX_DATA_POINTS, Math.round(max - min + 1)));
@@ -982,51 +1112,51 @@ function initChart() {
             scales: {
                 x: {
                     display: true,
-                    border:  { display: false },
+                    border: { display: false },
                     title: {
                         display: !!(xTitles[timeFilter]),
-                        text:    xTitles[timeFilter] || '',
-                        font:    { size: 10, weight: '600', family: "'DM Sans','Segoe UI',sans-serif" },
-                        color:   '#9CA3AF',
+                        text: xTitles[timeFilter] || '',
+                        font: { size: 10, weight: '600', family: "'DM Sans','Segoe UI',sans-serif" },
+                        color: '#9CA3AF',
                         padding: { top: 6 },
                     },
                     grid: {
-                        color:     'rgba(226,232,240,0.8)',
+                        color: 'rgba(226,232,240,0.8)',
                         drawTicks: false,
                         lineWidth: 1,
                     },
                     ticks: {
-                        maxRotation:     0,
-                        minRotation:     0,
-                        font:            { size: 10.5, family: "'DM Sans','Segoe UI',sans-serif" },
-                        color:           '#9CA3AF',
-                        maxTicksLimit:   maxTicksMap[timeFilter] ?? 10,
-                        padding:         8,
-                        autoSkip:        true,
-                        autoSkipPadding: 24,
+                        maxRotation: 0,
+                        minRotation: 0,
+                        font: { size: 10.5, family: "'DM Sans','Segoe UI',sans-serif" },
+                        color: '#9CA3AF',
+                        maxTicksLimit: maxTicksMap[timeFilter] ?? 10,
+                        padding: 8,
+                        autoSkip: true,
+                        autoSkipPadding: timeFilter === 'day' ? 16 : 24,
                     },
                     offset: isBar,
                 },
                 y: {
-                    display:  true,
+                    display: true,
                     position: 'left',
-                    border:   { display: false },
+                    border: { display: false },
                     title: {
                         display: true,
-                        text:    unitLabel,
-                        font:    { size: 10, weight: '600', family: "'DM Sans','Segoe UI',sans-serif" },
-                        color:   '#9CA3AF',
+                        text: unitLabel,
+                        font: { size: 10, weight: '600', family: "'DM Sans','Segoe UI',sans-serif" },
+                        color: '#9CA3AF',
                         padding: { bottom: 8 },
                     },
                     grid: {
-                        color:     'rgba(226,232,240,0.8)',
+                        color: 'rgba(226,232,240,0.8)',
                         drawTicks: false,
                         lineWidth: 1,
                     },
                     ticks: {
-                        font:          { size: 10.5, family: "'DM Sans','Segoe UI',sans-serif" },
-                        color:         '#9CA3AF',
-                        padding:       12,
+                        font: { size: 10.5, family: "'DM Sans','Segoe UI',sans-serif" },
+                        color: '#9CA3AF',
+                        padding: 12,
                         maxTicksLimit: 6,
                         callback: v => {
                             if (v == null) return '';
@@ -1041,53 +1171,89 @@ function initChart() {
         },
     });
 
+    if (_clipPathCleanupId) {
+        clearTimeout(_clipPathCleanupId);
+        _clipPathCleanupId = null;
+    }
+
+    if (!isBar && _chartEntryAnimate) {
+        _chartEntryAnimate = false;
+        const container = ctx.parentElement;
+
+        container.style.transition = 'none';
+        container.style.clipPath = '';
+        void container.offsetWidth;
+
+        container.style.clipPath = 'inset(0 100% 0 0)';
+        void container.offsetWidth;
+
+        container.style.transition = 'clip-path 0.9s cubic-bezier(0.4, 0, 0.2, 1)';
+        container.style.clipPath = 'inset(0 0% 0 0)';
+
+        _clipPathCleanupId = setTimeout(() => {
+            container.style.transition = '';
+            container.style.clipPath = '';
+            _clipPathCleanupId = null;
+        }, 950);
+    }
+
     ctx.addEventListener('mouseleave', () => {
         if (!_ttDrag.active && !_ttDrag.pinned) hideIscTooltip();
     });
 }
 
-// ── Firebase Synchronized Chart Buffer ───────────────────────────────────────
-let _chartBufferRef  = null;
-let _chartInitialLoad = false;
+const CHART_INTERVAL_MS = 1000;
+let _chartTimer = null;
 
-function _attachChartBufferListener(deviceId) {
-    if (_chartBufferRef) {
-        _chartBufferRef.off();
-        _chartBufferRef = null;
-    }
+function _chartZeroPoint() {
+    return {
+        'Voltage (V)': 0, 'Current (A)': 0, 'Power (W)': 0,
+        'Frequency (Hz)': 0, 'Active Energy (kWh)': 0, 'Power Factor': 0,
+        'Apparent Power (kVA)': 0, 'Reactive Power (kVAR)': 0,
+        'Phase Angle (°)': 0, 'Apparent Energy (kVAh)': 0, 'Reactive Energy (kVARh)': 0,
+    };
+}
 
-    _chartInitialLoad = false;
+function _chartPush() {
+    const ts = Date.now();
+    const online = isConnected && !!rawRealtimeData;
+    let phases = online ? _detectPhaseKeys(rawRealtimeData) : _getEnabledPhaseKeys();
+    if (!phases.length) phases = ['L1'];
+
+    const point = { ts };
+    phases.forEach(ph => {
+        point[ph] = (online && rawRealtimeData[ph]) ? rawRealtimeData[ph] : _chartZeroPoint();
+    });
+
+    _appendChartPoint(point);
+    const raw = _rebuildRawFromPoint(point);
+    if (raw) accumulatePoint(raw);
+
+    _rafDirty = true;
+    if (_pageVisible && timeFilter === 'all') _scheduleRender();
+}
+
+function _chartInit(deviceId) {
+    if (_chartTimer) { clearInterval(_chartTimer); _chartTimer = null; }
     resetChartData();
 
-    database.ref(`devices/${deviceId}/ChartBuffer`)
-        .orderByKey()
-        .limitToLast(MAX_DATA_POINTS)
-        .once('value', snapshot => {
-            if (snapshot.exists()) {
-                snapshot.forEach(child => {
-                    _appendChartPoint(child.val());
-                });
-            }
-            rebuildCascadeFromRaw();
-            _rebuildChart();
-            _chartInitialLoad = true;
-            console.log(`[ChartBuffer] Loaded ${chartLabels.length} historical points`);
+    const now = Date.now();
+    let phases = _getEnabledPhaseKeys();
+    if (!phases.length) {
+        const dev = _deviceListCache.find(d => d.id === deviceId);
+        phases = (dev?.phases || []).filter(p => p.enabled !== false).map(p => p.phase);
+    }
+    if (!phases.length) phases = ['L1'];
 
-            const nowKey = `p${Date.now()}`;
-            _chartBufferRef = database.ref(`devices/${deviceId}/ChartBuffer`)
-                .orderByKey()
-                .startAt(nowKey);
+    for (let ts = now - _visiblePoints * CHART_INTERVAL_MS; ts <= now; ts += CHART_INTERVAL_MS) {
+        const point = { ts };
+        phases.forEach(ph => { point[ph] = _chartZeroPoint(); });
+        _appendChartPoint(point);
+    }
 
-            _chartBufferRef.on('child_added', snap => {
-                _appendChartPoint(snap.val());
-
-                const raw = _rebuildRawFromPoint(snap.val());
-                if (raw) accumulatePoint(raw);
-
-                _rafDirty = true;
-                if (_pageVisible && timeFilter === 'all') _scheduleRender();
-            });
-        });
+    rebuildCascadeFromRaw();
+    _rebuildChart();
+    _chartTimer = setInterval(() => { if (selectedDeviceId === deviceId) _chartPush(); }, CHART_INTERVAL_MS);
 }
 
 function _rebuildRawFromPoint(point) {
@@ -1102,7 +1268,7 @@ function _rebuildRawFromPoint(point) {
 function _appendChartPoint(point) {
     if (!point || !point.ts) return;
 
-    const ts     = point.ts;
+    const ts = point.ts;
     const phases = Object.keys(point).filter(k => /^L\d+$/.test(k));
     if (!phases.length) return;
 
@@ -1136,25 +1302,22 @@ function _appendChartPoint(point) {
     }
 }
 
-function updateChart(raw) {
-    // Chart data fed by Firebase ChartBuffer listener — intentionally empty.
-}
+function updateChart(raw) {}
 
 function changeParameter() { _switchParameter(DOM.paramSelect?.value); }
 
 function _switchParameter(param) {
     if (!param) return;
     selectedParameter = param;
-    _userIsZoomed     = false;
-    _visiblePoints    = 150;
+    _userIsZoomed = false;
+    _visiblePoints = 150;
     if (DOM.paramSelect) DOM.paramSelect.value = param;
     document.querySelectorAll('.metric-card-compact').forEach(card => {
         card.classList.toggle('card-active', card.dataset.param === param);
     });
-    _rebuildChart();
+    _rebuildChart(true);
 }
 
-// ── Tabs ──────────────────────────────────────────────────────────────────────
 function switchTab(tabName) {
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -1163,7 +1326,6 @@ function switchTab(tabName) {
     if (tabName === 'history') loadDevices().then(() => buildSessionUI());
 }
 
-// ── Devices ───────────────────────────────────────────────────────────────────
 async function loadDevices() {
     try {
         const devices = await fetch('/api/devices').then(r => r.json());
@@ -1183,10 +1345,12 @@ async function loadDevices() {
         if (!visible.length) return;
 
         if (!selectedDeviceId) {
-            selectedDeviceId   = visible[0].id;
+            selectedDeviceId = visible[0].id;
             selectedDeviceName = visible[0].name || visible[0].id;
             _attachRealtimeListener(selectedDeviceId);
             _attachHistoryListener(selectedDeviceId);
+            _attachHourlyListener(selectedDeviceId);
+            _attachDayListener(selectedDeviceId);
         } else {
             const activeDev = visible.find(d => d.id === selectedDeviceId);
             if (activeDev) selectedDeviceName = activeDev.name || activeDev.id;
@@ -1200,7 +1364,7 @@ async function loadDevices() {
             const enabledPhases = activeDev.phases.filter(p => p.enabled !== false).map(p => p.phase);
             updatePhaseSelector(enabledPhases);
         }
-    } catch (e) { console.warn('[Devices] Load failed:', e); }
+    } catch (e) {}
 }
 
 function _populateDeviceSelect(devices) {
@@ -1220,12 +1384,12 @@ function renderDeviceList(devices) {
         return;
     }
 
-    const editSVG  = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
+    const editSVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
     const checkSVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>`;
     const closeSVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
 
     container.innerHTML = devices.map(d => {
-        const dotClass   = d.online ? 'online' : 'offline';
+        const dotClass = d.online ? 'online' : 'offline';
         const phasesHTML = (d.phases && d.phases.length > 0)
             ? d.phases.map(p => {
                 const isEnabled = p.enabled !== false;
@@ -1311,10 +1475,10 @@ function cancelRenameDevice(deviceId) {
 }
 
 async function saveDeviceName(deviceId) {
-    const input   = $(`rename_${deviceId}`);
+    const input = $(`rename_${deviceId}`);
     const newName = input?.value.trim();
-    if (!newName)             { await showModal('Error', 'Nama tidak boleh kosong', 'warning');    return; }
-    if (newName.length < 2)   { await showModal('Error', 'Nama minimal 2 karakter', 'warning');    return; }
+    if (!newName) { await showModal('Error', 'Nama tidak boleh kosong', 'warning'); return; }
+    if (newName.length < 2) { await showModal('Error', 'Nama minimal 2 karakter', 'warning'); return; }
     if (newName.length > 100) { await showModal('Error', 'Nama maksimal 100 karakter', 'warning'); return; }
     if (/[\/\.\$\#\[\]]/.test(newName)) { await showModal('Error', 'Karakter tidak diizinkan: / . $ # [ ]', 'warning'); return; }
 
@@ -1335,8 +1499,8 @@ async function saveDeviceName(deviceId) {
 
     try {
         const controller = new AbortController();
-        const tid        = setTimeout(() => controller.abort(), 8000);
-        const response   = await fetch(`/api/devices/${deviceId}/rename`, {
+        const tid = setTimeout(() => controller.abort(), 8000);
+        const response = await fetch(`/api/devices/${deviceId}/rename`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: newName }), signal: controller.signal,
         });
@@ -1364,10 +1528,16 @@ async function onDeviceChange(deviceId) {
         database.ref(`devices/${_prevDeviceId}/History`).off();
         database.ref(`devices/${_prevDeviceId}/meta/name`).off();
         database.ref(`devices/${_prevDeviceId}/meta/sensors`).off();
+        database.ref(`devices/${_prevDeviceId}/HourlyCapture`).off();
+        database.ref(`devices/${_prevDeviceId}/DayCapture`).off();
+        _hourlyListenerAttached = null;
+        _dayListenerAttached = null;
+        hourlyFirebaseData = {};
+        dayFirebaseData = {};
     }
-    if (_chartBufferRef) { _chartBufferRef.off(); _chartBufferRef = null; }
+    if (_chartTimer) { clearInterval(_chartTimer); _chartTimer = null; }
 
-    selectedDeviceId   = deviceId;
+    selectedDeviceId = deviceId;
     selectedDeviceName = _deviceListCache.find(d => d.id === deviceId)?.name || deviceId;
 
     selectedPhase = '';
@@ -1390,9 +1560,10 @@ async function onDeviceChange(deviceId) {
     _attachHistoryListener(deviceId);
     _attachDeviceNameListener(deviceId);
     _attachPhasesListener(deviceId);
+    _attachHourlyListener(deviceId);
+    _attachDayListener(deviceId);
 }
 
-// ── Phase/Sensor Rename ───────────────────────────────────────────────────────
 function startRenamePhase(deviceId, phase) {
     const id = `${deviceId}_${phase}`;
     $(`phase-view_${id}`).style.display = 'none';
@@ -1402,7 +1573,7 @@ function startRenamePhase(deviceId, phase) {
 }
 
 function cancelRenamePhase(deviceId, phase) {
-    const id    = `${deviceId}_${phase}`;
+    const id = `${deviceId}_${phase}`;
     const label = $(`phase-label_${id}`), input = $(`phase-rename_${id}`);
     if (label && input) input.value = label.textContent;
     $(`phase-edit_${id}`).style.display = 'none';
@@ -1411,17 +1582,17 @@ function cancelRenamePhase(deviceId, phase) {
 }
 
 async function savePhaseRename(deviceId, phase) {
-    const id      = `${deviceId}_${phase}`;
-    const input   = $(`phase-rename_${id}`);
+    const id = `${deviceId}_${phase}`;
+    const input = $(`phase-rename_${id}`);
     const newName = input?.value.trim();
-    if (!newName)           { await showModal('Error', 'Nama tidak boleh kosong', 'warning'); return; }
+    if (!newName) { await showModal('Error', 'Nama tidak boleh kosong', 'warning'); return; }
     if (newName.length < 2) { await showModal('Error', 'Nama minimal 2 karakter', 'warning'); return; }
-    if (newName.length > 40){ await showModal('Error', 'Nama maksimal 40 karakter', 'warning'); return; }
+    if (newName.length > 40) { await showModal('Error', 'Nama maksimal 40 karakter', 'warning'); return; }
     if (/[\/\.\$\#\[\]]/.test(newName)) { await showModal('Error', 'Karakter tidak diizinkan: / . $ # [ ]', 'warning'); return; }
 
-    const dev    = _deviceListCache.find(d => d.id === deviceId);
+    const dev = _deviceListCache.find(d => d.id === deviceId);
     const phaseObj = dev?.phases?.find(p => p.phase === phase);
-    const oldName  = phaseObj?.name || phase;
+    const oldName = phaseObj?.name || phase;
 
     if (phaseObj) phaseObj.name = newName;
     const label = $(`phase-label_${id}`);
@@ -1433,8 +1604,8 @@ async function savePhaseRename(deviceId, phase) {
 
     try {
         const controller = new AbortController();
-        const tid        = setTimeout(() => controller.abort(), 8000);
-        const response   = await fetch(`/api/devices/${deviceId}/sensors/${phase}/rename`, {
+        const tid = setTimeout(() => controller.abort(), 8000);
+        const response = await fetch(`/api/devices/${deviceId}/sensors/${phase}/rename`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: newName }), signal: controller.signal,
         });
@@ -1452,9 +1623,8 @@ async function savePhaseRename(deviceId, phase) {
     }
 }
 
-// ── Toggle Phase Enabled ─────────────────────────────────────────────────────
 async function togglePhaseEnabled(deviceId, phase, enabled) {
-    const dev      = _deviceListCache.find(d => d.id === deviceId);
+    const dev = _deviceListCache.find(d => d.id === deviceId);
     const phaseObj = dev?.phases?.find(p => p.phase === phase);
 
     if (!enabled && dev?.phases) {
@@ -1477,8 +1647,8 @@ async function togglePhaseEnabled(deviceId, phase, enabled) {
 
     const nameEl = $(`phase-label_${deviceId}_${phase}`);
     if (nameEl) {
-        nameEl.style.opacity         = enabled ? '' : '0.45';
-        nameEl.style.textDecoration  = enabled ? '' : 'line-through';
+        nameEl.style.opacity = enabled ? '' : '0.45';
+        nameEl.style.textDecoration = enabled ? '' : 'line-through';
     }
 
     const statusEl = item?.querySelector('.device-phase-status');
@@ -1497,31 +1667,28 @@ async function togglePhaseEnabled(deviceId, phase, enabled) {
 
     try {
         await fetch(`/api/devices/${deviceId}/sensors/${phase}/enabled`, {
-            method:  'POST',
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ enabled }),
+            body: JSON.stringify({ enabled }),
         });
     } catch (e) {
         if (phaseObj) phaseObj.enabled = !enabled;
         const cb = document.querySelector(`#phase-item_${deviceId}_${phase} .phase-toggle-cb`);
         if (cb) cb.checked = !enabled;
         if (deviceId === selectedDeviceId) _rebuildChart();
-        console.warn('[PhaseToggle] Gagal:', e);
     }
 }
 
-// ── Real-time listener ────────────────────────────────────────────────────────
 function _attachRealtimeListener(deviceId) {
     _prevDeviceId = deviceId;
-
-    _attachChartBufferListener(deviceId);
+    _chartInit(deviceId);
 
     let _firstSnap = true;
     let _lastPhaseCount = Object.keys(phaseChartData).filter(k => /^L\d+$/.test(k)).length;
 
     database.ref(`devices/${deviceId}/RealTime`).on('value', snapshot => {
         if (!snapshot.exists()) { updateConnectionStatus(false); return; }
-        const raw  = snapshot.val();
+        const raw = snapshot.val();
         const data = normalizeFirebaseData(raw);
         if (!data) { updateConnectionStatus(false); return; }
 
@@ -1539,9 +1706,9 @@ function _attachRealtimeListener(deviceId) {
         }
 
         lastDataTimestamp = Date.now();
-        rawRealtimeData   = raw;
-        realtimeData      = data;
-        isConnected       = true;
+        rawRealtimeData = raw;
+        realtimeData = data;
+        isConnected = true;
 
         if (selectedPhase) {
             const displayData = getPhaseDisplayData(raw, selectedPhase);
@@ -1556,7 +1723,7 @@ function _attachRealtimeListener(deviceId) {
 function updateConnectionStatus(connected) {
     const dot = DOM.statusDot, txt = DOM.statusText;
     if (!dot || !txt) return;
-    dot.classList.toggle('online',  connected);
+    dot.classList.toggle('online', connected);
     dot.classList.toggle('offline', !connected);
     txt.textContent = connected ? 'ONLINE' : 'OFFLINE';
     if (!connected) updateDisplayCardsBlank();
@@ -1575,7 +1742,6 @@ function startConnectionMonitoring() {
     connectionCheckInterval = setInterval(checkDataFreshness, 2000);
 }
 
-// ── Search ────────────────────────────────────────────────────────────────────
 function onDbSearchInput(value) {
     dbSearchQuery = value.trim().toLowerCase();
     $('dbSearchClear')?.classList.toggle('visible', dbSearchQuery.length > 0);
@@ -1591,7 +1757,6 @@ function clearDbSearch() {
     input?.focus();
 }
 
-// ── History ───────────────────────────────────────────────────────────────────
 let historyData = [], recordsBySession = {};
 
 function _attachHistoryListener(deviceId) {
@@ -1603,7 +1768,7 @@ function _attachHistoryListener(deviceId) {
                 if (!/^L\d+$/.test(phase)) return;
                 phaseSnap.forEach(sessionSnap => {
                     const sid = sessionSnap.key;
-                    if (!recordsBySession[sid])        recordsBySession[sid]        = {};
+                    if (!recordsBySession[sid]) recordsBySession[sid] = {};
                     if (!recordsBySession[sid][phase]) recordsBySession[sid][phase] = [];
                     sessionSnap.forEach(recordSnap => {
                         if (recordSnap.key === '_meta') {
@@ -1637,7 +1802,7 @@ function _attachDeviceNameListener(deviceId) {
         if (sel) Array.from(sel.options).forEach(opt => { if (opt.value === deviceId) opt.text = newName; });
         const label = $(`label_${deviceId}`);
         if (label) label.textContent = newName;
-    }, err => console.warn('[NameSync] ❌', err));
+    });
 }
 
 function _attachPhasesListener(deviceId) {
@@ -1653,9 +1818,9 @@ function _attachPhasesListener(deviceId) {
 
         dev.phases = phaseKeys.map(phase => ({
             phase,
-            name:       sensorsData[phase]?.name       || phase,
+            name: sensorsData[phase]?.name || phase,
             properties: sensorsData[phase]?.properties || [],
-            enabled:    sensorsData[phase]?.enabled !== false,
+            enabled: sensorsData[phase]?.enabled !== false,
         }));
         dev.phaseCount = dev.phases.length;
 
@@ -1667,14 +1832,14 @@ function _attachPhasesListener(deviceId) {
         const visible = _deviceListCache.filter(d => d.id !== 'alat1');
         renderDeviceList(visible);
         if ($('historyContent')?.classList.contains('active')) buildSessionUI();
-    }, err => console.warn('[PhasesSync] ❌', err));
+    });
 }
 
 function parseTimestamp(ts) {
     try {
         const [time, date] = ts.split(' ');
-        const [h, m, s]    = time.split(':').map(Number);
-        const [d, mo, y]   = date.split('/').map(Number);
+        const [h, m, s] = time.split(':').map(Number);
+        const [d, mo, y] = date.split('/').map(Number);
         return new Date(y, mo - 1, d, h, m, s);
     } catch (_) { return new Date(); }
 }
@@ -1687,7 +1852,7 @@ function _highlight(text) {
 
 function buildSessionUI() {
     const allSessions = Object.values(sessionsData).sort((a, b) => (b.startTimestamp || 0) - (a.startTimestamp || 0));
-    const filtered    = dbSearchQuery ? allSessions.filter(s => (s.name || s.id || '').toLowerCase().includes(dbSearchQuery)) : allSessions;
+    const filtered = dbSearchQuery ? allSessions.filter(s => (s.name || s.id || '').toLowerCase().includes(dbSearchQuery)) : allSessions;
 
     if (DOM.historyCount) {
         DOM.historyCount.textContent = dbSearchQuery
@@ -1704,14 +1869,14 @@ function buildSessionUI() {
     }
 
     const openSessions = new Set();
-    const openPhases   = new Set();
+    const openPhases = new Set();
     document.querySelectorAll('.session-detail-row').forEach(row => { if (row.style.display !== 'none') openSessions.add(row.id.replace('detail_', '')); });
     document.querySelectorAll('[id^="phase-detail_"]').forEach(el => { if (el.style.display !== 'none') openPhases.add(el.id.replace('phase-detail_', '')); });
 
     const editingPhases = new Map();
     document.querySelectorAll('[id^="sph-edit_"]').forEach(el => {
         if (el.style.display !== 'none') {
-            const key     = el.id.replace('sph-edit_', '');
+            const key = el.id.replace('sph-edit_', '');
             const inputEl = document.getElementById('sph-input_' + key);
             editingPhases.set(key, inputEl ? inputEl.value : '');
         }
@@ -1737,7 +1902,7 @@ function buildSessionUI() {
         });
 
         const allPhaseRecords = Object.values(recordsBySession[session.id] || {}).flat();
-        const isActive        = session.id === currentSessionId && captureActive;
+        const isActive = session.id === currentSessionId && captureActive;
 
         const actionBtns = isActive ? '' : `
             <button class="session-export-btn" onclick="exportSession('${session.id}','${_escapeAttr(session.name)}',event)" title="Export">
@@ -1787,19 +1952,20 @@ function buildSessionUI() {
                     ${(() => {
                         const pr = (recordsBySession[session.id]?.[p.phase] || []).slice().sort((a, b) => parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp));
                         return `<table class="data-table inner-table" style="width:100%;margin:0;border-radius:0">
-                        <thead><tr><th>Timestamp</th><th>Voltage (V)</th><th>Current (A)</th><th>Power (W)</th><th>Energy (kWh)</th><th>PF</th></tr></thead>
+                        <thead><tr><th>Timestamp</th><th>Voltage (V)</th><th>Current (A)</th><th>Power (W)</th><th>Frequency (Hz)</th><th>Energy (kWh)</th><th>PF</th></tr></thead>
                         <tbody>${pr.length ? pr.map(e => {
-                            const pfColor = e.offline ? '#9CA3AF' : (e.PowerFactor >= 0.95 ? '#00A651' : '#ED1C24');
-                            const offTag  = e.offline ? ' <span style="color:#9CA3AF;font-size:9px;font-weight:700">[offline]</span>' : '';
+                            const pfColor = e.offline ? '#9CA3AF' : (e.PowerFactor >= 0.85 ? '#00A651' : '#ED1C24');
+                            const offTag = e.offline ? ' <span style="color:#9CA3AF;font-size:9px;font-weight:700">[offline]</span>' : '';
                             return '<tr class="inner-record-row"' + (e.offline ? ' style="opacity:0.5;font-style:italic"' : '') + '>'
                                 + '<td>' + e.timestamp + offTag + '</td>'
                                 + '<td>' + (e.Voltage    != null ? e.Voltage.toFixed(2)    : '---') + '</td>'
                                 + '<td>' + (e.Current    != null ? e.Current.toFixed(2)    : '---') + '</td>'
                                 + '<td>' + (e.Power      != null ? e.Power.toFixed(2)      : '---') + '</td>'
+                                + '<td>' + (e.Frequency  != null ? e.Frequency.toFixed(2)  : '---') + '</td>'
                                 + '<td>' + (e.Energy     != null ? e.Energy.toFixed(3)     : '---') + '</td>'
                                 + '<td style="color:' + pfColor + '">' + (e.PowerFactor != null ? e.PowerFactor.toFixed(3) : '---') + '</td>'
                                 + '</tr>';
-                        }).join('') : '<tr><td colspan="6" class="loading-cell" style="padding:20px !important">Belum ada record</td></tr>'}</tbody>
+                        }).join('') : '<tr><td colspan="7" class="loading-cell" style="padding:20px !important">Belum ada record</td></tr>'}</tbody>
                         </table>`;
                     })()}
                 </div>
@@ -1846,8 +2012,8 @@ function buildSessionUI() {
     });
 
     editingPhases.forEach((inputValue, key) => {
-        const viewEl  = document.getElementById('sph-view_' + key);
-        const editEl  = document.getElementById('sph-edit_' + key);
+        const viewEl = document.getElementById('sph-view_' + key);
+        const editEl = document.getElementById('sph-edit_' + key);
         const inputEl = document.getElementById('sph-input_' + key);
         if (!editEl) return;
         if (viewEl)  viewEl.style.display = 'none';
@@ -1865,7 +2031,7 @@ function toggleSessionDetail(sessionId) {
     const detail = $(`detail_${sessionId}`), chevron = $(`chevron_${sessionId}`);
     if (!detail) return;
     const isOpen = detail.style.display !== 'none';
-    detail.style.display  = isOpen ? 'none' : 'table-row';
+    detail.style.display = isOpen ? 'none' : 'table-row';
     if (chevron) chevron.textContent = isOpen ? '\u25B6' : '\u25BC';
 }
 
@@ -1873,11 +2039,10 @@ function togglePhaseDetails(sessionId, phase) {
     const detail = $(`phase-detail_${sessionId}_${phase}`), chevron = $(`chevron_${sessionId}_${phase}`);
     if (!detail) return;
     const isOpen = detail.style.display !== 'none';
-    detail.style.display  = isOpen ? 'none' : 'block';
+    detail.style.display = isOpen ? 'none' : 'block';
     if (chevron) chevron.textContent = isOpen ? '▶' : '▼';
 }
 
-// ── Session Phase Rename ──────────────────────────────────────────────────────
 (function _injectSphHoverStyle() {
     if (document.getElementById('sph-hover-style')) return;
     const s = document.createElement('style');
@@ -1898,8 +2063,8 @@ function togglePhaseDetails(sessionId, phase) {
 })();
 
 function startRenameSessionPhase(sessionId, phase) {
-    const viewEl  = $(`sph-view_${sessionId}_${phase}`);
-    const editEl  = $(`sph-edit_${sessionId}_${phase}`);
+    const viewEl = $(`sph-view_${sessionId}_${phase}`);
+    const editEl = $(`sph-edit_${sessionId}_${phase}`);
     const inputEl = $(`sph-input_${sessionId}_${phase}`);
     if (!viewEl || !editEl) return;
     viewEl.style.display = 'none';
@@ -1909,8 +2074,8 @@ function startRenameSessionPhase(sessionId, phase) {
 }
 
 function cancelRenameSessionPhase(sessionId, phase) {
-    const viewEl  = $(`sph-view_${sessionId}_${phase}`);
-    const editEl  = $(`sph-edit_${sessionId}_${phase}`);
+    const viewEl = $(`sph-view_${sessionId}_${phase}`);
+    const editEl = $(`sph-edit_${sessionId}_${phase}`);
     const inputEl = $(`sph-input_${sessionId}_${phase}`);
     const labelEl = $(`sph-label_${sessionId}_${phase}`);
     if (inputEl && labelEl) inputEl.value = labelEl.textContent;
@@ -1977,7 +2142,6 @@ function getDevicePhasesWithNames() {
     return dev.phases.filter(p => p.enabled !== false).map(p => ({ phase: p.phase, name: p.name }));
 }
 
-// ── Excel Export ──────────────────────────────────────────────────────────────
 const COL_WIDTHS = [
     { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 10 }, { wch: 13 }, { wch: 13 }, { wch: 13 },
     { wch: 20 }, { wch: 20 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 22 }, { wch: 22 },
@@ -2069,11 +2233,11 @@ async function clearRecords() {
     } catch (e) { await showModal('Error', 'Gagal menghapus! Error: ' + e.message, 'error'); }
 }
 
-// ── Capture ───────────────────────────────────────────────────────────────────
-let captureActive         = false;
-let captureInterval       = 3000;
+let captureActive = false;
+let captureInterval = 3000;
 let _captureTransitioning = false;
-let _captureStatusPollId  = null;
+let _captureStatusPollId = null;
+let _intervalUserEdited = false;
 
 async function syncCaptureStatus() {
     try {
@@ -2081,32 +2245,30 @@ async function syncCaptureStatus() {
 
         if (!_captureTransitioning) {
             if (status.active) {
-                captureActive    = true;
+                captureActive = true;
                 currentSessionId = status.session_id || null;
                 _updateCaptureButtonUI(true);
             } else if (!status.finalizing) {
-                captureActive    = false;
+                captureActive = false;
                 currentSessionId = null;
                 _updateCaptureButtonUI(false);
             }
         }
 
-        if (!_captureTransitioning) {
+        if (!_captureTransitioning && !_intervalUserEdited) {
             const serverSec = status.interval || 3;
             captureInterval = serverSec * 1000;
             const inputEl = $('intervalInput'), unitEl = $('intervalUnit');
             if (inputEl && unitEl) {
                 inputEl.value = serverSec;
-                unitEl.value  = '1';
+                unitEl.value = '1';
             }
             if (DOM.intervalDisplay)
                 DOM.intervalDisplay.textContent = `Current: ${serverSec} seconds`;
         }
 
         buildSessionUI();
-    } catch (e) {
-        console.warn('[Capture] Status poll failed:', e);
-    }
+    } catch (e) {}
 }
 
 function _startStatusPolling() {
@@ -2115,7 +2277,7 @@ function _startStatusPolling() {
 }
 
 const CAPTURE_START_HTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> Start Capture`;
-const CAPTURE_STOP_HTML  = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg> Stop Capture`;
+const CAPTURE_STOP_HTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg> Stop Capture`;
 
 function _updateCaptureButtonUI(active) {
     const btn = DOM.captureBtn;
@@ -2127,7 +2289,7 @@ function _updateCaptureButtonUI(active) {
 async function toggleCapture() {
     if (!captureActive) {
         if (!selectedDeviceId) { await showModal('Pilih Device', 'Pilih device terlebih dahulu.', 'warning'); return; }
-        if (!isConnected)      { await showModal('Device Offline', 'Tidak dapat memulai capture.\nPastikan device menyala.', 'error'); return; }
+        if (!isConnected) { await showModal('Device Offline', 'Tidak dapat memulai capture.\nPastikan device menyala.', 'error'); return; }
         openSessionNameModal();
     } else {
         const confirmed = await showModal('Hentikan Rekaman', 'Hentikan sesi rekaman yang sedang berlangsung?\n\nData sudah tersimpan di Firebase.', 'warning', ['confirm']);
@@ -2136,8 +2298,8 @@ async function toggleCapture() {
 }
 
 async function _apiStopCapture() {
-    captureActive         = false;
-    currentSessionId      = null;
+    captureActive = false;
+    currentSessionId = null;
     _captureTransitioning = true;
     _updateCaptureButtonUI(false);
     buildSessionUI();
@@ -2157,7 +2319,7 @@ async function _apiStopCapture() {
 
 function openSessionNameModal() {
     const input = $('sessionNameInput');
-    const now   = new Date(), pad = v => String(v).padStart(2, '0');
+    const now = new Date(), pad = v => String(v).padStart(2, '0');
     input.value = `Rekaman ${pad(now.getDate())}/${pad(now.getMonth() + 1)}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
     _resetSessionModal();
     $('sessionNameModal').classList.add('active');
@@ -2175,9 +2337,9 @@ function closeSessionNameModal() {
 function _resetSessionModal() {
     const modal = $('sessionNameModal');
     if (!modal) return;
-    modal.querySelector('.modal-title').textContent   = 'Mulai Rekaman Baru';
+    modal.querySelector('.modal-title').textContent = 'Mulai Rekaman Baru';
     modal.querySelector('.modal-message').textContent = 'Beri nama sesi rekaman ini sebelum memulai.';
-    const btn    = modal.querySelector('.modal-btn-primary');
+    const btn = modal.querySelector('.modal-btn-primary');
     btn.innerHTML = '&#9654; MULAI REKAM'; btn.onclick = confirmStartCapture;
 }
 
@@ -2185,9 +2347,9 @@ function openRenameModal(sessionId, currentName, event) {
     event.stopPropagation();
     _renamingSessionId = sessionId;
     const modal = $('sessionNameModal');
-    modal.querySelector('.modal-title').textContent   = 'Rename Sesi';
+    modal.querySelector('.modal-title').textContent = 'Rename Sesi';
     modal.querySelector('.modal-message').textContent = 'Ubah nama sesi rekaman ini.';
-    const btn    = modal.querySelector('.modal-btn-primary');
+    const btn = modal.querySelector('.modal-btn-primary');
     btn.innerHTML = 'SIMPAN NAMA'; btn.onclick = confirmRenameSession;
     $('sessionNameInput').value = currentName;
     modal.classList.add('active');
@@ -2196,7 +2358,7 @@ function openRenameModal(sessionId, currentName, event) {
 }
 
 async function confirmRenameSession() {
-    const newName  = $('sessionNameInput')?.value.trim();
+    const newName = $('sessionNameInput')?.value.trim();
     const targetId = _renamingSessionId;
     if (!newName) { await showModal('Nama Kosong', 'Nama sesi tidak boleh kosong.', 'warning'); return; }
     closeSessionNameModal();
@@ -2218,11 +2380,11 @@ async function confirmStartCapture() {
     const intervalSec = Math.round(captureInterval / 1000) || 3;
     closeSessionNameModal();
 
-    const activeDev  = _deviceListCache.find(d => d.id === selectedDeviceId);
+    const activeDev = _deviceListCache.find(d => d.id === selectedDeviceId);
     const phasesHint = (activeDev?.phases || []).filter(p => p.enabled !== false).map(p => p.phase);
 
-    captureActive         = true;
-    currentSessionId      = null;
+    captureActive = true;
+    currentSessionId = null;
     _captureTransitioning = true;
     _updateCaptureButtonUI(true);
     buildSessionUI();
@@ -2235,19 +2397,19 @@ async function confirmStartCapture() {
 
     try {
         const json = await fetch('/api/capture/start', {
-            method:  'POST',
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({
+            body: JSON.stringify({
                 sessionName,
-                interval:   intervalSec,
-                deviceId:   selectedDeviceId,
+                interval: intervalSec,
+                deviceId: selectedDeviceId,
                 deviceName: selectedDeviceName,
-                phases:     phasesHint,
+                phases: phasesHint,
             }),
         }).then(r => r.json());
 
         if (!json.ok) {
-            captureActive    = false;
+            captureActive = false;
             currentSessionId = null;
             _updateCaptureButtonUI(false);
             closeModal();
@@ -2260,7 +2422,7 @@ async function confirmStartCapture() {
         buildSessionUI();
 
     } catch (e) {
-        captureActive    = false;
+        captureActive = false;
         currentSessionId = null;
         _updateCaptureButtonUI(false);
         closeModal();
@@ -2276,7 +2438,7 @@ async function deleteSession(sessionId, sessionName, event) {
     const confirmed = await showModal('Hapus Sesi', `Hapus sesi:\n"${sessionName}"\n\nSemua record akan ikut terhapus.`, 'warning', ['confirm']);
     if (!confirmed) return;
     try {
-        const phases    = getDevicePhasesWithNames();
+        const phases = getDevicePhasesWithNames();
         const phaseKeys = phases.length > 0 ? phases.map(p => p.phase) : Object.keys(recordsBySession[sessionId] || {});
         if (phaseKeys.length > 0) {
             await Promise.all(phaseKeys.map(ph => database.ref(`devices/${selectedDeviceId}/History/${ph}/${sessionId}`).remove()));
@@ -2291,28 +2453,26 @@ async function deleteSession(sessionId, sessionName, event) {
 }
 
 async function setCaptureInterval() {
-    const val        = parseInt($('intervalInput')?.value);
+    const val = parseInt($('intervalInput')?.value);
     const multiplier = parseInt($('intervalUnit')?.value);
     if (isNaN(val) || val < 1) { await showModal('Input Tidak Valid', 'Masukkan nilai interval yang valid (minimal 1)!', 'warning'); return; }
-    const totalSec  = val * multiplier;
+    const totalSec = val * multiplier;
     captureInterval = totalSec * 1000;
+    _intervalUserEdited = true;
     const unitLabel = $('intervalUnit')?.options[$('intervalUnit').selectedIndex]?.text.toLowerCase() || 'seconds';
     if (DOM.intervalDisplay) DOM.intervalDisplay.textContent = multiplier === 1 ? `Current: ${val} seconds` : `Current: ${val} ${unitLabel} (${totalSec}s)`;
 
     try {
         await fetch('/api/capture/interval', {
-            method:  'POST',
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ interval: totalSec }),
+            body: JSON.stringify({ interval: totalSec }),
         });
-    } catch (e) {
-        console.warn('[Capture] Could not update server interval:', e);
-    }
+    } catch (e) {}
 
     await showModal('Interval Diperbarui', `Interval diubah menjadi ${val} ${unitLabel}.`, 'success');
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
     initChart();
 
@@ -2332,6 +2492,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     await syncCaptureStatus();
     _startStatusPolling();
 
+    $('intervalInput')?.addEventListener('focus', () => { _intervalUserEdited = true; });
+    $('intervalInput')?.addEventListener('input', () => { _intervalUserEdited = true; });
+    $('intervalUnit')?.addEventListener('change', () => { _intervalUserEdited = true; });
     $('sessionNameInput')?.addEventListener('keydown', e => {
         if (e.key === 'Enter') { _renamingSessionId ? confirmRenameSession() : confirmStartCapture(); }
     });
@@ -2339,5 +2502,5 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 window.addEventListener('beforeunload', () => {
     if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
-    if (_chartBufferRef) { _chartBufferRef.off(); _chartBufferRef = null; }
+    if (_chartTimer) { clearInterval(_chartTimer); _chartTimer = null; }
 });
