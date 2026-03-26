@@ -4,14 +4,10 @@ from datetime import datetime, timedelta
 import requests as http_requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
-
-# Menyenyapkan log bawaan Flask di terminal agar bersih
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
-
 load_dotenv()
 app = Flask(__name__)
-
 _PROJECT_ID = os.environ.get('FIREBASE_PROJECT_ID', '')
 FIREBASE_CONFIG = {
     'apiKey':            os.environ.get('FIREBASE_API_KEY'),
@@ -24,24 +20,20 @@ FIREBASE_CONFIG = {
 }
 DB_URL = (os.environ.get('FIREBASE_DATABASE_URL') or '').rstrip('/')
 _PHASE_RE = re.compile(r'^L\d+$')
-
 def _detect_phases(device_data: dict) -> list[str]:
     keys: set[str] = set()
     for src in [device_data.get('RealTime') or {}, (device_data.get('meta') or {}).get('sensors') or {}]:
         if isinstance(src, dict): keys.update(k for k in src if _PHASE_RE.match(k))
     return sorted(keys, key=lambda x: int(x[1:])) or ['L1']
-
 def _fb(method: str, path: str, **kw):
     try:
         r = http_requests.request(method, f'{DB_URL}/{path}.json', timeout=6, **kw)
         return r.json() if r.ok else None
     except Exception: return None
-
 fb_get    = lambda p:    _fb('GET',    p)
 fb_put    = lambda p, d: _fb('PUT',    p, json=d) is not None
 fb_patch  = lambda p, d: _fb('PATCH',  p, json=d) is not None
 fb_delete = lambda p:    _fb('DELETE', p) is not None
-
 def normalize(raw: dict | None) -> dict | None:
     if not raw: return None
     try:
@@ -67,9 +59,7 @@ def normalize(raw: dict | None) -> dict | None:
             'EnergyReactive': sum(g(p, 'Reactive Energy (kVARh)') for p in phases),
         }
     except: return None
-
 def _ts_now() -> str: return datetime.now().strftime('%H:%M:%S %d/%m/%Y')
-
 def validate_device_name(name: str) -> tuple[bool, str]:
     if not name or not isinstance(name, str): return False, 'Nama harus berupa text'
     name = name.strip()
@@ -78,9 +68,7 @@ def validate_device_name(name: str) -> tuple[bool, str]:
     if len(name) > 100: return False, 'Nama maksimal 100 karakter'
     if any(c in name for c in '/.$#[]'): return False, 'Karakter tidak diizinkan: / . $ # [ ]'
     return True, ''
-
 def validate_phase_key(phase: str) -> bool: return bool(_PHASE_RE.match(phase))
-
 _capture_lock  = threading.Lock()
 _capture_state = {
     'active': False, 'device_id': None, 'device_name': None,
@@ -88,22 +76,26 @@ _capture_state = {
     'count': 0, 'started_at': None, 'enabled_phases': None,
     '_thread': None, '_stop_event': None, '_wake_event': None, '_finalizing': False,
 }
-
 def _data_hash(raw): return hashlib.md5(json.dumps(raw, sort_keys=True).encode()).hexdigest() if raw else None
-
 _hourly_stop = threading.Event()
+_device_hourly_hash = {}
 
 def _do_hourly_capture_device(device_id: str) -> None:
     try:
         raw = fb_get(f'devices/{device_id}/RealTime')
         if not raw or not isinstance(raw, dict): return
+        
+        h = _data_hash(raw)
+        if _device_hourly_hash.get(device_id) == h:
+            return
+        _device_hourly_hash[device_id] = h
+        
         now = datetime.now()
         m   = (now.minute // 5) * 5
         key = f'{now.strftime("%H")}{str(m).zfill(2)}'
         date_str = now.strftime('%Y-%m-%d')
         ts  = f'{now.strftime("%H")}:{str(m).zfill(2)} {now.strftime("%d/%m/%Y")}'
         phases = sorted([k for k in raw if _PHASE_RE.match(k)], key=lambda x: int(x[1:])) or ['L1']
-
         def _w(ph: str) -> None:
             pd = raw.get(ph) or {}
             def f(k):
@@ -120,7 +112,6 @@ def _do_hourly_capture_device(device_id: str) -> None:
         for t in ts_list: t.start()
         for t in ts_list: t.join(timeout=8)
     except Exception: pass
-
 def _do_day_capture_device(device_id: str) -> None:
     try:
         today  = datetime.now().strftime('%Y-%m-%d')
@@ -142,19 +133,16 @@ def _do_day_capture_device(device_id: str) -> None:
             for old in sorted(all_days)[:-7]:
                 fb_delete(f'devices/{device_id}/DayCapture/{ph}/{old}')
     except Exception: pass
-
 def _chain_capture_and_day(device_id: str) -> None:
     _do_hourly_capture_device(device_id)
     time.sleep(3)
     _do_day_capture_device(device_id)
-
 def _do_hourly_capture_all() -> None:
     try:
         for did, dd in (fb_get('devices') or {}).items():
             if isinstance(dd, dict):
                 threading.Thread(target=_chain_capture_and_day, args=(did,), daemon=True).start()
     except Exception: pass
-
 def _hourly_worker() -> None:
     INTERVAL = 300
     now = datetime.now()
@@ -165,9 +153,7 @@ def _hourly_worker() -> None:
     while not _hourly_stop.is_set():
         if _hourly_stop.wait(timeout=INTERVAL): break
         _do_hourly_capture_all()
-
 threading.Thread(target=_hourly_worker, daemon=True).start()
-
 def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_change, enabled_phases):
     try:
         raw = fb_get(f'devices/{device_id}/RealTime')
@@ -179,7 +165,6 @@ def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_ch
         key = f'capture_{int(sched_ts * 1000)}'
         all_ph = sorted([k for k in (raw or {}) if _PHASE_RE.match(k)], key=lambda x: int(x[1:])) or ['L1']
         phases = ([p for p in all_ph if p in enabled_phases] or enabled_phases) if enabled_phases else all_ph
-
         def _w(ph: str) -> None:
             pd = {} if offline else ((raw or {}).get(ph) if isinstance((raw or {}).get(ph), dict) else {})
             def f(k):
@@ -198,7 +183,6 @@ def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_ch
         for t in ts_list: t.join(timeout=8)
         with _capture_lock: _capture_state['count'] += 1
     except Exception: pass
-
 def _capture_worker(stop: threading.Event, wake: threading.Event) -> None:
     last_hash: list = [None]; last_change: list = [None]; nxt = time.time()
     while not stop.is_set():
@@ -214,13 +198,11 @@ def _capture_worker(stop: threading.Event, wake: threading.Event) -> None:
             iv  = float(_capture_state['interval']); ep = _capture_state.get('enabled_phases')
         sched = nxt; nxt += iv
         threading.Thread(target=_do_capture_io, args=(did, sid, sched, iv, last_hash, last_change, ep), daemon=True).start()
-
 def _start_thread() -> None:
     se, we = threading.Event(), threading.Event()
     t = threading.Thread(target=_capture_worker, args=(se, we), daemon=True)
     t.start()
     _capture_state.update({'_thread': t, '_stop_event': se, '_wake_event': we})
-
 def _finalize_bg(sid, did, count, se, th, enabled_phases) -> None:
     try:
         if se: se.set()
@@ -235,7 +217,6 @@ def _finalize_bg(sid, did, count, se, th, enabled_phases) -> None:
     except Exception: pass
     finally:
         with _capture_lock: _capture_state['_finalizing'] = False
-
 def _stop_and_respond() -> None:
     with _capture_lock:
         if not _capture_state['active']: return
@@ -249,13 +230,10 @@ def _stop_and_respond() -> None:
             '_thread': None, '_stop_event': None, '_wake_event': None,
         })
     threading.Thread(target=_finalize_bg, args=(sid, did, cnt, se, th, ep), daemon=True).start()
-
 @app.route('/')
 def index(): return render_template('index.html', firebase_config=FIREBASE_CONFIG)
-
 @app.route('/api/config')
 def get_config(): return jsonify(FIREBASE_CONFIG)
-
 @app.route('/api/devices')
 def list_devices():
     devices = []
@@ -271,7 +249,6 @@ def list_devices():
         devices.append({'id': did, 'name': meta.get('name', did), 'online': meta.get('online', False),
                         'lastSeen': meta.get('lastSeen', '---'), 'phases': phases, 'phaseCount': len(phases)})
     return jsonify(sorted(devices, key=lambda d: d['id']))
-
 @app.route('/api/devices/<device_id>/init-sensors', methods=['POST'])
 def init_device_sensors(device_id: str):
     dd = fb_get(f'devices/{device_id}') or {}
@@ -283,7 +260,6 @@ def init_device_sensors(device_id: str):
                        'created_at': _ts_now(), 'updated_at': _ts_now()}):
                 count += 1
     return jsonify({'ok': True, 'initialized': count, 'device_id': device_id, 'phases': detected})
-
 @app.route('/api/devices/<device_id>/rename', methods=['POST'])
 def rename_device(device_id: str):
     name = ((request.get_json(silent=True) or {}).get('name') or '').strip()
@@ -292,7 +268,6 @@ def rename_device(device_id: str):
     if fb_patch(f'devices/{device_id}/meta', {'name': name}):
         return jsonify({'ok': True, 'name': name, 'timestamp': int(time.time() * 1000)})
     return jsonify({'ok': False, 'error': 'Gagal menyimpan ke Firebase'}), 500
-
 @app.route('/api/devices/<device_id>/sensors/<phase>/rename', methods=['POST'])
 def rename_sensor(device_id: str, phase: str):
     phase = phase.upper()
@@ -306,7 +281,6 @@ def rename_sensor(device_id: str, phase: str):
     if fb_patch(f'devices/{device_id}/meta/sensors/{phase}', data):
         return jsonify({'ok': True, 'name': name, 'phase': phase, 'timestamp': int(time.time() * 1000)})
     return jsonify({'ok': False, 'error': 'Gagal menyimpan ke Firebase'}), 500
-
 @app.route('/api/devices/<device_id>/sensors/<phase>/init', methods=['POST'])
 def init_sensor(device_id: str, phase: str):
     phase = phase.upper()
@@ -317,7 +291,6 @@ def init_sensor(device_id: str, phase: str):
     if fb_put(f'devices/{device_id}/meta/sensors/{phase}', data):
         return jsonify({'ok': True, 'sensor': data, 'timestamp': int(time.time() * 1000)})
     return jsonify({'ok': False, 'error': 'Gagal membuat sensor'}), 500
-
 @app.route('/api/devices/<device_id>/sensors/<phase>/enabled', methods=['POST'])
 def set_phase_enabled(device_id: str, phase: str):
     phase = phase.upper()
@@ -326,17 +299,14 @@ def set_phase_enabled(device_id: str, phase: str):
     if fb_patch(f'devices/{device_id}/meta/sensors/{phase}', {'enabled': enabled, 'updated_at': _ts_now()}):
         return jsonify({'ok': True, 'phase': phase, 'enabled': enabled})
     return jsonify({'ok': False, 'error': 'Gagal menyimpan'}), 500
-
 @app.route('/api/devices/<device_id>/hourly-capture', methods=['POST'])
 def trigger_hourly_capture(device_id: str):
     threading.Thread(target=_chain_capture_and_day, args=(device_id,), daemon=True).start()
     return jsonify({'ok': True, 'device_id': device_id, 'triggered_at': _ts_now()})
-
 @app.route('/api/hourly-capture/trigger-all', methods=['POST'])
 def trigger_hourly_all():
     threading.Thread(target=_do_hourly_capture_all, daemon=True).start()
     return jsonify({'ok': True, 'triggered_at': _ts_now()})
-
 @app.route('/api/capture/status')
 def capture_status():
     with _capture_lock:
@@ -346,7 +316,6 @@ def capture_status():
             'session_id': s['session_id'], 'session_name': s['session_name'], 'interval': s['interval'],
             'count': s['count'], 'started_at': s['started_at'], 'finalizing': s.get('_finalizing', False),
         })
-
 @app.route('/api/capture/start', methods=['POST'])
 def capture_start():
     body  = request.get_json(silent=True) or {}
@@ -356,7 +325,6 @@ def capture_start():
     iv    = max(1, int(body.get('interval', 3)))
     hints = sorted([p for p in (body.get('phases') or []) if _PHASE_RE.match(p)], key=lambda x: int(x[1:]))
     if not did: return jsonify({'ok': False, 'error': 'deviceId harus diisi'}), 400
-
     with _capture_lock:
         if _capture_state['active'] or _capture_state.get('_finalizing'):
             return jsonify({'ok': False, 'error': 'Capture sudah berjalan atau sedang finalisasi'}), 409
@@ -389,14 +357,12 @@ def capture_start():
         threading.Thread(target=_energy_bg, daemon=True).start()
         _start_thread()
     return jsonify({'ok': True, 'session_id': sid, 'session_name': sname, 'device_id': did})
-
 @app.route('/api/capture/stop', methods=['POST'])
 def capture_stop():
     with _capture_lock:
         if not _capture_state['active']: return jsonify({'ok': False, 'error': 'Tidak ada capture aktif'}), 400
     _stop_and_respond()
     return jsonify({'ok': True})
-
 @app.route('/api/capture/interval', methods=['POST'])
 def capture_interval():
     iv = max(1, int((request.get_json(silent=True) or {}).get('interval', 3)))
@@ -405,6 +371,5 @@ def capture_interval():
         ev = _capture_state.get('_wake_event')
         if ev: ev.set()
     return jsonify({'ok': True, 'interval': iv})
-
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

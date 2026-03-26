@@ -5,93 +5,81 @@ let rawRealtimeData = null;
 let isConnected = false;
 let lastDataTimestamp = 0;
 let connectionCheckInterval = null;
-
 let selectedDeviceId = '';
 let selectedDeviceName = '';
 let _deviceListCache = [];
 let _prevDeviceId = '';
-
 let currentSessionId = null;
 let sessionsData = {};
 let _renamingSessionId = null;
-
 let dbSearchQuery = '';
-
 let _renamingDeviceId = null;
 let selectedPhase = '';
-
 let hourlyFirebaseData = {};
 let _hourlyListenerAttached = null;
-
 let dayFirebaseData = {};
 let _dayListenerAttached = null;
-
 let realtimeChart = null;
 let selectedParameter = 'voltage';
 let timeFilter = 'all';
 let _userIsZoomed = false;
 let _visiblePoints = 300;
-
 const MAX_DATA_POINTS = 600;
 const PARAM_KEYS = ['voltage', 'current', 'power', 'frequency', 'energy', 'powerFactor'];
-
 let phaseChartData = {};
 let chartLabels = [];
 let chartTimestamps = [];
-
 let _rafId = null;
 let _rafDirty = false;
 let _pageVisible = !document.hidden;
-
 document.addEventListener('visibilitychange', () => {
     _pageVisible = !document.hidden;
     if (_pageVisible && _rafDirty && timeFilter === 'all') _scheduleRender();
 });
-
 function _scheduleRender() {
     if (_rafId) return;
     _rafId = requestAnimationFrame(_doRender);
 }
-
 function _doRender() {
     _rafId = null;
     _rafDirty = false;
     if (!realtimeChart || !_pageVisible || timeFilter !== 'all') return;
-
     const enabledKeys = _getEnabledPhaseKeys();
-    const phases = Object.keys(phaseChartData)
-        .filter(p => enabledKeys.includes(p))
-        .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+    const phases = enabledKeys.slice().sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
     if (!phases.length) return;
-
     const total = chartLabels.length;
     if (total === 0) return;
-
     const visible = Math.min(_visiblePoints, total);
     const start = total - visible;
-
     realtimeChart.data.labels = chartLabels.slice(start);
-
     const slicedDatasets = [];
+    let mismatch = false;
     phases.forEach((phase, i) => {
-        const values = phaseChartData[phase]?.[selectedParameter] || [];
+        let values = phaseChartData[phase]?.[selectedParameter] || [];
+        if (!values.length) values = Array(total).fill(0);
+        else if (values.length < total) values = [...Array(total - values.length).fill(0), ...values];
         const sliced = values.slice(start);
-        const ds = realtimeChart.data.datasets[i];
-        if (ds) ds.data = sliced;
-        slicedDatasets.push({ data: sliced });
+        const labelName = getPhaseLabel(phase);
+        const ds = realtimeChart.data.datasets.find(d => d.label === labelName);
+        if (ds) {
+            ds.data = sliced;
+            slicedDatasets.push({ data: sliced });
+        } else {
+            mismatch = true;
+        }
     });
-
+    if (mismatch || phases.length !== realtimeChart.data.datasets.length) {
+        _rebuildChart();
+        return;
+    }
     const { yMin, yMax } = getYBoundsMulti(slicedDatasets, selectedParameter);
     realtimeChart.options.scales.y.min = yMin;
     realtimeChart.options.scales.y.max = yMax;
-
     realtimeChart.update('none');
 }
-
 let _rebuildTimer = null;
 let _chartEntryAnimate = false;
 let _clipPathCleanupId = null;
-
 function _rebuildChart(animate = false) {
     if (_rebuildTimer) clearTimeout(_rebuildTimer);
     _chartEntryAnimate = animate;
@@ -102,13 +90,11 @@ function _rebuildChart(animate = false) {
         _startAggRebuild();
     }, 80);
 }
-
 let _lastChartMinute = -1;
 let _lastChartHour = -1;
 let _lastChartDay = -1;
 let _timeWindowCheckId = null;
 let _aggRebuildId = null;
-
 const PHASE_COLORS = [
     { line: '#1677FF', bar: 'rgba(22,119,255,0.75)', light: 'rgba(22,119,255,0.18)' },
     { line: '#FF6B35', bar: 'rgba(255,107,53,0.75)', light: 'rgba(255,107,53,0.18)' },
@@ -116,12 +102,10 @@ const PHASE_COLORS = [
     { line: '#7B61FF', bar: 'rgba(123,97,255,0.75)', light: 'rgba(123,97,255,0.18)' },
     { line: '#FF4D4F', bar: 'rgba(255,77,79,0.75)', light: 'rgba(255,77,79,0.18)' },
 ];
-
 function getPhaseColors(phase) {
     const idx = parseInt(phase.slice(1)) - 1;
     return PHASE_COLORS[Math.min(idx, PHASE_COLORS.length - 1)] || PHASE_COLORS[0];
 }
-
 function createAreaGradient(ctx, chartArea, color) {
     const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
     const base = color.replace('rgba(', '').replace(')', '').split(',');
@@ -131,7 +115,6 @@ function createAreaGradient(ctx, chartArea, color) {
     gradient.addColorStop(1, `rgba(${r},${g},${b},0)`);
     return gradient;
 }
-
 const crosshairPlugin = {
     id: 'isolarCrosshair',
     afterDraw(chart) {
@@ -163,22 +146,17 @@ const crosshairPlugin = {
         ctx.restore();
     },
 };
-
 Chart.register(crosshairPlugin);
-
 const _ttDrag = { active: false, offX: 0, offY: 0, pinned: false };
-
 function _initTooltipDrag(el) {
     if (el._dragInit) return;
     el._dragInit = true;
     el.style.cursor = 'grab';
     el.title = 'Drag untuk memindahkan · Klik 2x untuk reset posisi';
-
     el.addEventListener('dblclick', () => {
         _ttDrag.pinned = false;
         el.style.transition = '';
     });
-
     el.addEventListener('mousedown', e => {
         if (e.button !== 0) return;
         _ttDrag.active = true;
@@ -191,21 +169,18 @@ function _initTooltipDrag(el) {
         e.stopPropagation();
         e.preventDefault();
     });
-
     document.addEventListener('mousemove', e => {
         if (!_ttDrag.active) return;
         _ttDrag.pinned = true;
         el.style.left = (e.clientX - _ttDrag.offX) + 'px';
         el.style.top = (e.clientY - _ttDrag.offY) + 'px';
     });
-
     document.addEventListener('mouseup', () => {
         if (!_ttDrag.active) return;
         _ttDrag.active = false;
         el.style.cursor = 'grab';
     });
 }
-
 function iSolarTooltipHandler(context) {
     const { chart, tooltip } = context;
     let el = document.getElementById('isc-tooltip');
@@ -216,7 +191,6 @@ function iSolarTooltipHandler(context) {
         document.body.appendChild(el);
         _initTooltipDrag(el);
     }
-
     if (tooltip.opacity === 0) {
         if (_ttDrag.active || _ttDrag.pinned) return;
         el.style.opacity = '0';
@@ -224,11 +198,9 @@ function iSolarTooltipHandler(context) {
         _ttDrag.pinned = false;
         return;
     }
-
     const info = PARAM_INFO[selectedParameter];
     const title = tooltip.title?.[0] || '';
     let html = `<div class="isc-tt-header"><span class="isc-tt-clock">🕐</span><span>${title}</span></div><div class="isc-tt-rows">`;
-
     (tooltip.dataPoints || []).forEach(dp => {
         const val = dp.parsed.y;
         const color = dp.dataset.borderColor || dp.dataset.backgroundColor;
@@ -243,13 +215,11 @@ function iSolarTooltipHandler(context) {
     });
     html += '</div>';
     el.innerHTML = html;
-
     const rect = chart.canvas.getBoundingClientRect();
     const cx = tooltip.caretX;
     const cy = tooltip.caretY;
     const ttW = el.offsetWidth || 190;
     const ttH = el.offsetHeight || 80;
-
     let left, top;
     if (timeFilter === 'week') {
         left = rect.right + window.scrollX - ttW - 12;
@@ -262,7 +232,6 @@ function iSolarTooltipHandler(context) {
         left = rect.left + window.scrollX + leftBase;
         top = rect.top + window.scrollY + topBase;
     }
-
     el.style.opacity = '1';
     el.style.transform = 'translateY(0)';
     el.style.pointerEvents = 'auto';
@@ -271,7 +240,6 @@ function iSolarTooltipHandler(context) {
         el.style.top = top + 'px';
     }
 }
-
 function hideIscTooltip() {
     const el = document.getElementById('isc-tooltip');
     if (!el) return;
@@ -279,13 +247,11 @@ function hideIscTooltip() {
     el.style.opacity = '0';
     el.style.pointerEvents = 'none';
 }
-
 function getPhaseLabel(phase) {
     const dev = _deviceListCache.find(d => d.id === selectedDeviceId);
     const phaseObj = dev?.phases?.find(p => p.phase === phase);
     return phaseObj?.name && phaseObj.name !== phase ? `${phase} (${phaseObj.name})` : phase;
 }
-
 const $ = id => document.getElementById(id);
 const DOM = {
     get statusDot() { return $('statusDot'); },
@@ -299,16 +265,13 @@ const DOM = {
     get paramSelect() { return $('parameterSelect'); },
     get intervalDisplay() { return $('intervalDisplay'); },
 };
-
 function resetChartData() { phaseChartData = {}; chartLabels = []; chartTimestamps = []; resetAggData(); }
-
 function _detectPhaseKeys(raw) {
     if (!raw || typeof raw !== 'object') return [];
     return Object.keys(raw)
         .filter(k => /^L\d+$/.test(k))
         .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
 }
-
 function _getEnabledPhaseKeys() {
     const dev = _deviceListCache.find(d => d.id === selectedDeviceId);
     if (!dev?.phases?.length) {
@@ -318,26 +281,21 @@ function _getEnabledPhaseKeys() {
         .filter(p => p.enabled !== false)
         .map(p => p.phase);
 }
-
 function normalizeFirebaseData(raw) {
     if (!raw) return null;
     const phases = _detectPhaseKeys(raw);
     if (!phases.length) return null;
-
     const getVal = (phase, key) =>
         raw[phase] && raw[phase][key] ? parseFloat(raw[phase][key]) || 0 : 0;
-
     const voltages = phases.map(p => getVal(p, 'Voltage (V)'));
     const currents = phases.map(p => getVal(p, 'Current (A)'));
     const powers = phases.map(p => getVal(p, 'Power (W)'));
     const freqs = phases.map(p => getVal(p, 'Frequency (Hz)'));
     const energies = phases.map(p => getVal(p, 'Active Energy (kWh)'));
     const pfs = phases.map(p => getVal(p, 'Power Factor'));
-
     const sum = arr => arr.reduce((a, b) => a + b, 0);
     const activePhases = voltages.filter(v => v > 0).length;
     const denom = activePhases > 0 ? activePhases : 1;
-
     return {
         Voltage: sum(voltages) / denom,
         Current: sum(currents),
@@ -354,14 +312,11 @@ function normalizeFirebaseData(raw) {
         _phases: phases,
     };
 }
-
 function getPhaseDisplayData(raw, phase) {
     if (!raw) return null;
     const phaseData = raw[phase];
     if (!phaseData || typeof phaseData !== 'object') return null;
-
     const f = key => { try { return parseFloat(phaseData[key] || 0) || 0; } catch (_) { return 0; } };
-
     return {
         Voltage: f('Voltage (V)'),
         Current: f('Current (A)'),
@@ -377,7 +332,6 @@ function getPhaseDisplayData(raw, phase) {
         _phases: [phase],
     };
 }
-
 function setPhase(phase) {
     selectedPhase = phase;
     document.querySelectorAll('.phase-btn').forEach(btn => {
@@ -389,21 +343,17 @@ function setPhase(phase) {
         else updateDisplayCardsBlank();
     }
 }
-
 function updatePhaseSelector(phases) {
     const container = $('phaseSelectorBtns');
     if (!container) return;
-
     const dev = _deviceListCache.find(d => d.id === selectedDeviceId);
     const enabledPhases = phases.filter(p => {
         const po = dev?.phases?.find(ph => ph.phase === p);
         return !po || po.enabled !== false;
     });
-
     if (!selectedPhase || !enabledPhases.includes(selectedPhase)) {
         selectedPhase = enabledPhases[0] || '';
     }
-
     container.innerHTML = enabledPhases.map(p => {
         const phaseObj = dev?.phases?.find(ph => ph.phase === p);
         const label = phaseObj?.name && phaseObj.name !== p
@@ -412,32 +362,25 @@ function updatePhaseSelector(phases) {
         return `<button class="phase-btn${selectedPhase === p ? ' active' : ''}" data-phase="${p}" onclick="setPhase('${p}')">${label}</button>`;
     }).join('');
 }
-
 const _p2 = v => String(v).padStart(2, '0');
-
 function _minKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}T${_p2(d.getHours())}:${_p2(d.getMinutes())}`; }
 function _hourKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}T${_p2(d.getHours())}`; }
 function _dayKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}`; }
-
 let phaseMinAgg = {};
 let phaseHourAgg = {};
 let phaseDayAgg = {};
-
 let _prevMinKey = '';
 let _prevHourKey = '';
 let _prevDayKey = '';
-
 function _ensureAgg(agg, phase, param, key) {
     if (!agg[phase]) agg[phase] = {};
     if (!agg[phase][param]) agg[phase][param] = {};
     if (!agg[phase][param][key]) agg[phase][param][key] = { sum: 0, count: 0 };
 }
-
 function _avgOf(agg, phase, param, key) {
     const e = agg[phase]?.[param]?.[key];
     return (e && e.count > 0) ? e.sum / e.count : null;
 }
-
 function accumulatePoint(raw) {
     if (!raw) return;
     const now = Date.now();
@@ -445,7 +388,6 @@ function accumulatePoint(raw) {
     const hourKey = _hourKey(now);
     const dayKey = _dayKey(now);
     const phases = _detectPhaseKeys(raw);
-
     if (_prevMinKey && _prevMinKey !== minKey) {
         phases.forEach(phase => {
             PARAM_KEYS.forEach(param => {
@@ -458,7 +400,6 @@ function accumulatePoint(raw) {
             });
         });
     }
-
     if (_prevHourKey && _prevHourKey !== hourKey) {
         phases.forEach(phase => {
             PARAM_KEYS.forEach(param => {
@@ -472,11 +413,9 @@ function accumulatePoint(raw) {
         });
         _pruneOldMinAgg();
     }
-
     _prevMinKey = minKey;
     _prevHourKey = hourKey;
     _prevDayKey = dayKey;
-
     phases.forEach(phase => {
         const pd = raw[phase] || {};
         const fv = k => { try { return parseFloat(pd[k] || 0) || 0; } catch (_) { return 0; } };
@@ -495,7 +434,6 @@ function accumulatePoint(raw) {
         });
     });
 }
-
 function _pruneOldMinAgg() {
     const cutoff = _minKey(Date.now() - 2 * 3_600_000);
     Object.values(phaseMinAgg).forEach(phaseData =>
@@ -504,7 +442,6 @@ function _pruneOldMinAgg() {
         )
     );
 }
-
 function resetAggData() {
     phaseMinAgg = {};
     phaseHourAgg = {};
@@ -513,14 +450,11 @@ function resetAggData() {
     _prevHourKey = '';
     _prevDayKey = '';
 }
-
 function rebuildCascadeFromRaw() {
     resetAggData();
     if (!chartTimestamps.length) return;
-
     const phases = Object.keys(phaseChartData);
     if (!phases.length) return;
-
     for (let i = 0; i < chartTimestamps.length; i++) {
         const ts = chartTimestamps[i];
         const mk = _minKey(ts);
@@ -534,7 +468,6 @@ function rebuildCascadeFromRaw() {
             });
         });
     }
-
     const liveMinKey = _minKey(Date.now());
     phases.forEach(phase => {
         PARAM_KEYS.forEach(param => {
@@ -550,7 +483,6 @@ function rebuildCascadeFromRaw() {
             });
         });
     });
-
     const liveHourKey = _hourKey(Date.now());
     phases.forEach(phase => {
         PARAM_KEYS.forEach(param => {
@@ -566,19 +498,16 @@ function rebuildCascadeFromRaw() {
             });
         });
     });
-
     const now = Date.now();
     _prevMinKey = _minKey(now);
     _prevHourKey = _hourKey(now);
     _prevDayKey = _dayKey(now);
 }
-
 function getHourlyFirebaseData(phase, param) {
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${_p2(now.getMonth()+1)}-${_p2(now.getDate())}`;
     const currentHour = now.getHours();
     const currentMin = Math.floor(now.getMinutes() / 5) * 5;
-
     const fieldMap = {
         voltage: 'Voltage',
         current: 'Current',
@@ -588,26 +517,23 @@ function getHourlyFirebaseData(phase, param) {
         powerFactor: 'PowerFactor',
     };
     const field = fieldMap[param] || 'Voltage';
-
     const labels = [], values = [];
-
     for (let h = 0; h <= currentHour; h++) {
         const maxMin = (h === currentHour) ? currentMin : 55;
         for (let m = 0; m <= maxMin; m += 5) {
             const key = `${_p2(h)}${_p2(m)}`;
             const rec = hourlyFirebaseData[phase]?.[key];
-
+            labels.push(`${_p2(h)}:${_p2(m)}`);
             if (rec && rec.date === todayStr) {
-                labels.push(`${_p2(h)}:${_p2(m)}`);
                 const v = rec[field];
-                values.push(v != null ? parseFloat(parseFloat(v).toFixed(4)) : null);
+                values.push(v != null ? parseFloat(parseFloat(v).toFixed(4)) : 0);
+            } else {
+                values.push(0);
             }
         }
     }
-
     return { labels, values };
 }
-
 function _attachHourlyListener(deviceId) {
     if (_hourlyListenerAttached === deviceId) {
         if (timeFilter === 'day' && realtimeChart) {
@@ -615,13 +541,11 @@ function _attachHourlyListener(deviceId) {
         }
         return;
     }
-
     if (_hourlyListenerAttached) {
         database.ref(`devices/${_hourlyListenerAttached}/HourlyCapture`).off();
     }
     _hourlyListenerAttached = deviceId;
     hourlyFirebaseData = {};
-
     database.ref(`devices/${deviceId}/HourlyCapture`).on('value', snap => {
         hourlyFirebaseData = {};
         if (snap.exists()) {
@@ -643,27 +567,16 @@ function _attachHourlyListener(deviceId) {
         }
     });
 }
-
 function _refreshDayChartFromFirebase() {
     if (!realtimeChart || timeFilter !== 'day') return;
     const { labels, datasets } = getAllPhaseDatasets();
     realtimeChart.data.labels = labels;
-    datasets.forEach((ds, i) => {
-        if (realtimeChart.data.datasets[i]) {
-            realtimeChart.data.datasets[i].data = ds.data;
-        } else {
-            realtimeChart.data.datasets.push(ds);
-        }
-    });
-    while (realtimeChart.data.datasets.length > datasets.length) {
-        realtimeChart.data.datasets.pop();
-    }
+    realtimeChart.data.datasets = datasets;
     const { yMin, yMax } = getYBoundsMulti(datasets, selectedParameter);
     realtimeChart.options.scales.y.min = yMin;
     realtimeChart.options.scales.y.max = yMax;
     realtimeChart.update('none');
 }
-
 function _attachDayListener(deviceId) {
     if (_dayListenerAttached === deviceId) {
         if (timeFilter === 'week' && realtimeChart) _refreshWeekChartFromFirebase();
@@ -674,7 +587,6 @@ function _attachDayListener(deviceId) {
     }
     _dayListenerAttached = deviceId;
     dayFirebaseData = {};
-
     database.ref(`devices/${deviceId}/DayCapture`).on('value', snap => {
         dayFirebaseData = {};
         if (snap.exists()) {
@@ -693,22 +605,16 @@ function _attachDayListener(deviceId) {
         }
     });
 }
-
 function _refreshWeekChartFromFirebase() {
     if (!realtimeChart || timeFilter !== 'week') return;
     const { labels, datasets } = getAllPhaseDatasets();
     realtimeChart.data.labels = labels;
-    datasets.forEach((ds, i) => {
-        if (realtimeChart.data.datasets[i]) realtimeChart.data.datasets[i].data = ds.data;
-        else realtimeChart.data.datasets.push(ds);
-    });
-    while (realtimeChart.data.datasets.length > datasets.length) realtimeChart.data.datasets.pop();
+    realtimeChart.data.datasets = datasets;
     const { yMin, yMax } = getYBoundsMulti(datasets, selectedParameter);
     realtimeChart.options.scales.y.min = yMin;
     realtimeChart.options.scales.y.max = yMax;
     realtimeChart.update('none');
 }
-
 function getDayViewData(phase, param) {
     const fieldMap = {
         voltage: 'Voltage', current: 'Current', power: 'Power',
@@ -716,9 +622,7 @@ function getDayViewData(phase, param) {
     };
     const field = fieldMap[param] || 'Voltage';
     const phaseRec = dayFirebaseData[phase] || {};
-
     const sortedKeys = Object.keys(phaseRec).sort();
-
     const labels = [], values = [];
     sortedKeys.forEach(dateKey => {
         const rec = phaseRec[dateKey];
@@ -726,24 +630,21 @@ function getDayViewData(phase, param) {
         const [, m, d] = dateKey.split('-');
         labels.push(`${d}/${m}`);
         const v = rec[field];
-        values.push(v != null ? parseFloat(parseFloat(v).toFixed(4)) : null);
+        values.push(v != null ? parseFloat(parseFloat(v).toFixed(4)) : 0);
     });
     return { labels, values };
 }
-
 function getAggregatedDataForPhase(phase, param) {
     if (timeFilter === 'all') return { labels: chartLabels, values: phaseChartData[phase]?.[param] || [] };
     if (timeFilter === 'day') return getHourlyFirebaseData(phase, param);
     return getDayViewData(phase, param);
 }
-
 const MODAL_ICONS = {
     success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>',
     warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
     error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
     info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>',
 };
-
 function showModal(title, message, type = 'info', buttons = ['ok']) {
     return new Promise(resolve => {
         $('modalTitle').textContent = title;
@@ -769,18 +670,14 @@ function showModal(title, message, type = 'info', buttons = ['ok']) {
         document.body.style.overflow = 'hidden';
     });
 }
-
 function closeModal() {
     $('customModal').classList.remove('active');
     document.body.style.overflow = '';
 }
-
 document.addEventListener('click', e => { if (e.target === $('customModal')) closeModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
-
 const CARD_IDS = ['voltage', 'current', 'power', 'frequency', 'energy', 'powerFactor'];
 const CARD_DEC = { voltage: 1, current: 2, power: 1, frequency: 1, energy: 3, powerFactor: 3 };
-
 function updateDisplayCards(data) {
     const fmt = (v, d) => (v != null && !isNaN(v)) ? parseFloat(v).toFixed(d) : '---';
     CARD_IDS.forEach(id => {
@@ -792,12 +689,10 @@ function updateDisplayCards(data) {
             + (selectedPhase ? ` · ${selectedPhase}` : '');
     }
 }
-
 function updateDisplayCardsBlank() {
     CARD_IDS.forEach(id => { const el = $(id); if (el) el.textContent = '---'; });
     if (DOM.lastUpdate) DOM.lastUpdate.textContent = '--- Device offline ---';
 }
-
 const PARAM_INFO = {
     voltage: { label: 'Voltage', unit: 'V', color: '#FFA500', border: '#FF8C00' },
     current: { label: 'Current', unit: 'A', color: '#0066CC', border: '#0052A3' },
@@ -806,7 +701,6 @@ const PARAM_INFO = {
     energy: { label: 'Energy', unit: 'kWh', color: '#00A651', border: '#008040' },
     powerFactor: { label: 'Power Factor', unit: '', color: '#6B46C1', border: '#5A3AA0' },
 };
-
 function setTimeFilter(filter) {
     timeFilter = filter;
     _userIsZoomed = false;
@@ -818,18 +712,13 @@ function setTimeFilter(filter) {
     _lastChartMinute = now.getMinutes();
     _lastChartHour = now.getHours();
     _lastChartDay = now.getDate();
-
     if (realtimeChart) { realtimeChart.destroy(); realtimeChart = null; }
-
     if (filter === 'day' && selectedDeviceId) _attachHourlyListener(selectedDeviceId);
     if (filter === 'week' && selectedDeviceId) _attachDayListener(selectedDeviceId);
-
     _rebuildChart(true);
 }
-
 function _startAggRebuild() {
     if (_aggRebuildId) { clearInterval(_aggRebuildId); _aggRebuildId = null; }
-
     if (timeFilter === 'day') {
         setTimeout(() => _refreshDayChartFromFirebase(), 150);
         _aggRebuildId = setInterval(() => {
@@ -837,7 +726,6 @@ function _startAggRebuild() {
         }, 30_000);
         return;
     }
-
     if (timeFilter === 'week') {
         setTimeout(() => _refreshWeekChartFromFirebase(), 150);
         _aggRebuildId = setInterval(() => {
@@ -845,13 +733,11 @@ function _startAggRebuild() {
         }, 300_000);
     }
 }
-
 function _checkTimeWindowChange() {
     const now = new Date();
     const m = now.getMinutes();
     const h = now.getHours();
     const day = now.getDate();
-
     if (timeFilter === 'day') {
         if (_lastChartDay !== -1 && day !== _lastChartDay) {
             hourlyFirebaseData = {};
@@ -867,12 +753,10 @@ function _checkTimeWindowChange() {
             _refreshWeekChartFromFirebase();
         }
     }
-
     _lastChartMinute = m;
     _lastChartHour = h;
     _lastChartDay = day;
 }
-
 function startTimeWindowMonitoring() {
     if (_timeWindowCheckId) clearInterval(_timeWindowCheckId);
     const now = new Date();
@@ -882,44 +766,21 @@ function startTimeWindowMonitoring() {
     _startAggRebuild();
     _timeWindowCheckId = setInterval(_checkTimeWindowChange, 5_000);
 }
-
 function getAllPhaseDatasets() {
     const enabledKeys = _getEnabledPhaseKeys();
-
     const isBar = timeFilter === 'week';
-
-    const phases = Object.keys(phaseChartData)
-        .filter(p => enabledKeys.includes(p))
-        .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
-
-    const dayFbPhases = Object.keys(dayFirebaseData)
-        .filter(p => /^L\d+$/.test(p) && enabledKeys.includes(p))
-        .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
-
-    const hourlyPhases = Object.keys(hourlyFirebaseData)
-        .filter(p => /^L\d+$/.test(p) && enabledKeys.includes(p))
-        .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
-
-    let allPhases;
-    if (timeFilter === 'week') {
-        allPhases = dayFbPhases.length
-            ? dayFbPhases
-            : [...new Set([...phases])].sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
-    } else if (timeFilter === 'day') {
-        allPhases = [...new Set([...phases, ...hourlyPhases])]
-            .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
-    } else {
-        allPhases = phases;
-    }
-
+    const allPhases = enabledKeys.slice().sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
     if (!allPhases.length) return { labels: [], datasets: [] };
-
-    const labels = getAggregatedDataForPhase(allPhases[0], selectedParameter).labels;
-
+    let labels = [];
+    for (const ph of allPhases) {
+        const ag = getAggregatedDataForPhase(ph, selectedParameter);
+        if (ag.labels && ag.labels.length > labels.length) labels = ag.labels;
+    }
     const datasets = allPhases.map(phase => {
         const colors = getPhaseColors(phase);
-        const { values } = getAggregatedDataForPhase(phase, selectedParameter);
-
+        let { values } = getAggregatedDataForPhase(phase, selectedParameter);
+        if (!values || values.length === 0) values = Array(labels.length).fill(0);
+        else if (values.length < labels.length) values = [...Array(labels.length - values.length).fill(0), ...values];
         const bgFn = isBar
             ? colors.bar
             : (context) => {
@@ -927,9 +788,7 @@ function getAllPhaseDatasets() {
                 if (!ch.chartArea) return colors.light;
                 return createAreaGradient(ch.ctx, ch.chartArea, colors.light);
             };
-
         const isDayLine = !isBar && timeFilter === 'day';
-
         return {
             label: getPhaseLabel(phase),
             data: values,
@@ -955,7 +814,6 @@ function getAllPhaseDatasets() {
     });
     return { labels, datasets };
 }
-
 function getYBoundsMulti(datasets, param) {
     const padMap = { voltage: 3, current: 0.2, power: 10, frequency: 0.2, energy: 0.05, powerFactor: 0.02 };
     const pad = padMap[param] ?? 2;
@@ -966,37 +824,32 @@ function getYBoundsMulti(datasets, param) {
     const actualPad = spread < pad ? pad : spread * 0.08;
     return { yMin: parseFloat((dataMin - actualPad).toFixed(4)), yMax: parseFloat((dataMax + actualPad).toFixed(4)) };
 }
-
 function initChart() {
     const ctx = $('realtimeChart');
     if (!ctx) return;
-
     const info = PARAM_INFO[selectedParameter];
     const isBar = timeFilter === 'week';
     const now = new Date();
-
     const xTitles = {
         all: '',
         day: `Hari ini — ${now.toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })} (Hourly)`,
         week: '7 Hari Terakhir',
     };
     const unitLabel = info.unit ? `${info.label} (${info.unit})` : info.label;
-
     let initLabels, initDatasets;
     if (timeFilter === 'all') {
         const total = chartLabels.length;
         const visible = Math.min(_visiblePoints, total);
         const start = Math.max(0, total - visible);
-
         const enabledKeys = _getEnabledPhaseKeys();
-        const phases = Object.keys(phaseChartData)
-            .filter(p => enabledKeys.includes(p))
-            .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
-
+        const phases = enabledKeys.slice().sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
         initLabels = chartLabels.slice(start);
         initDatasets = phases.map(phase => {
             const colors = getPhaseColors(phase);
-            const values = (phaseChartData[phase]?.[selectedParameter] || []).slice(start);
+            let values = phaseChartData[phase]?.[selectedParameter] || [];
+            if (!values.length) values = Array(total).fill(0);
+            else if (values.length < total) values = [...Array(total - values.length).fill(0), ...values];
+            values = values.slice(start);
             return {
                 label: getPhaseLabel(phase),
                 data: values,
@@ -1020,10 +873,8 @@ function initChart() {
         initLabels = built.labels;
         initDatasets = built.datasets;
     }
-
     const { yMin, yMax } = getYBoundsMulti(initDatasets, selectedParameter);
     const maxTicksMap = { all: 10, day: 12, week: 7 };
-
     realtimeChart = new Chart(ctx, {
         type: isBar ? 'bar' : 'line',
         data: { labels: initLabels, datasets: initDatasets },
@@ -1170,41 +1021,32 @@ function initChart() {
             },
         },
     });
-
     if (_clipPathCleanupId) {
         clearTimeout(_clipPathCleanupId);
         _clipPathCleanupId = null;
     }
-
     if (!isBar && _chartEntryAnimate) {
         _chartEntryAnimate = false;
         const container = ctx.parentElement;
-
         container.style.transition = 'none';
         container.style.clipPath = '';
         void container.offsetWidth;
-
         container.style.clipPath = 'inset(0 100% 0 0)';
         void container.offsetWidth;
-
         container.style.transition = 'clip-path 0.9s cubic-bezier(0.4, 0, 0.2, 1)';
         container.style.clipPath = 'inset(0 0% 0 0)';
-
         _clipPathCleanupId = setTimeout(() => {
             container.style.transition = '';
             container.style.clipPath = '';
             _clipPathCleanupId = null;
         }, 950);
     }
-
     ctx.addEventListener('mouseleave', () => {
         if (!_ttDrag.active && !_ttDrag.pinned) hideIscTooltip();
     });
 }
-
 const CHART_INTERVAL_MS = 1000;
 let _chartTimer = null;
-
 function _chartZeroPoint() {
     return {
         'Voltage (V)': 0, 'Current (A)': 0, 'Power (W)': 0,
@@ -1213,30 +1055,24 @@ function _chartZeroPoint() {
         'Phase Angle (°)': 0, 'Apparent Energy (kVAh)': 0, 'Reactive Energy (kVARh)': 0,
     };
 }
-
 function _chartPush() {
     const ts = Date.now();
     const online = isConnected && !!rawRealtimeData;
     let phases = online ? _detectPhaseKeys(rawRealtimeData) : _getEnabledPhaseKeys();
     if (!phases.length) phases = ['L1'];
-
     const point = { ts };
     phases.forEach(ph => {
         point[ph] = (online && rawRealtimeData[ph]) ? rawRealtimeData[ph] : _chartZeroPoint();
     });
-
     _appendChartPoint(point);
     const raw = _rebuildRawFromPoint(point);
     if (raw) accumulatePoint(raw);
-
     _rafDirty = true;
     if (_pageVisible && timeFilter === 'all') _scheduleRender();
 }
-
 function _chartInit(deviceId) {
     if (_chartTimer) { clearInterval(_chartTimer); _chartTimer = null; }
     resetChartData();
-
     const now = Date.now();
     let phases = _getEnabledPhaseKeys();
     if (!phases.length) {
@@ -1244,18 +1080,15 @@ function _chartInit(deviceId) {
         phases = (dev?.phases || []).filter(p => p.enabled !== false).map(p => p.phase);
     }
     if (!phases.length) phases = ['L1'];
-
     for (let ts = now - _visiblePoints * CHART_INTERVAL_MS; ts <= now; ts += CHART_INTERVAL_MS) {
         const point = { ts };
         phases.forEach(ph => { point[ph] = _chartZeroPoint(); });
         _appendChartPoint(point);
     }
-
     rebuildCascadeFromRaw();
     _rebuildChart();
     _chartTimer = setInterval(() => { if (selectedDeviceId === deviceId) _chartPush(); }, CHART_INTERVAL_MS);
 }
-
 function _rebuildRawFromPoint(point) {
     if (!point) return null;
     const phases = Object.keys(point).filter(k => /^L\d+$/.test(k));
@@ -1264,22 +1097,17 @@ function _rebuildRawFromPoint(point) {
     phases.forEach(ph => { raw[ph] = point[ph]; });
     return raw;
 }
-
 function _appendChartPoint(point) {
     if (!point || !point.ts) return;
-
     const ts = point.ts;
     const phases = Object.keys(point).filter(k => /^L\d+$/.test(k));
     if (!phases.length) return;
-
     const label = new Date(ts).toLocaleTimeString('id-ID', {
         hour: '2-digit', minute: '2-digit', second: '2-digit',
     });
     chartLabels.push(label);
     chartTimestamps.push(ts);
-
     const fv = (pd, k) => { try { return parseFloat(pd[k] || 0) || 0; } catch (_) { return 0; } };
-
     phases.forEach(phase => {
         if (!phaseChartData[phase]) {
             phaseChartData[phase] = Object.fromEntries(PARAM_KEYS.map(k => [k, []]));
@@ -1292,7 +1120,6 @@ function _appendChartPoint(point) {
         phaseChartData[phase].energy.push(fv(pd, 'Active Energy (kWh)'));
         phaseChartData[phase].powerFactor.push(fv(pd, 'Power Factor'));
     });
-
     if (chartLabels.length > MAX_DATA_POINTS) {
         chartLabels.shift();
         chartTimestamps.shift();
@@ -1301,11 +1128,8 @@ function _appendChartPoint(point) {
         });
     }
 }
-
 function updateChart(raw) {}
-
 function changeParameter() { _switchParameter(DOM.paramSelect?.value); }
-
 function _switchParameter(param) {
     if (!param) return;
     selectedParameter = param;
@@ -1317,7 +1141,6 @@ function _switchParameter(param) {
     });
     _rebuildChart(true);
 }
-
 function switchTab(tabName) {
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -1325,11 +1148,9 @@ function switchTab(tabName) {
     $(`${tabName}Content`)?.classList.add('active');
     if (tabName === 'history') loadDevices().then(() => buildSessionUI());
 }
-
 async function loadDevices() {
     try {
         const devices = await fetch('/api/devices').then(r => r.json());
-
         devices.forEach(d => {
             const cached = _deviceListCache.find(c => c.id === d.id);
             if (cached?.phases) {
@@ -1339,11 +1160,9 @@ async function loadDevices() {
                 });
             }
         });
-
         _deviceListCache = devices;
         const visible = devices.filter(d => d.id !== 'alat1');
         if (!visible.length) return;
-
         if (!selectedDeviceId) {
             selectedDeviceId = visible[0].id;
             selectedDeviceName = visible[0].name || visible[0].id;
@@ -1355,10 +1174,8 @@ async function loadDevices() {
             const activeDev = visible.find(d => d.id === selectedDeviceId);
             if (activeDev) selectedDeviceName = activeDev.name || activeDev.id;
         }
-
         _populateDeviceSelect(visible);
         renderDeviceList(visible);
-
         const activeDev = visible.find(d => d.id === selectedDeviceId);
         if (activeDev?.phases?.length) {
             const enabledPhases = activeDev.phases.filter(p => p.enabled !== false).map(p => p.phase);
@@ -1366,7 +1183,6 @@ async function loadDevices() {
         }
     } catch (e) {}
 }
-
 function _populateDeviceSelect(devices) {
     const sel = DOM.deviceSelect;
     if (!sel) return;
@@ -1375,7 +1191,6 @@ function _populateDeviceSelect(devices) {
         `<option value="${d.id}"${d.id === currentVal ? ' selected' : ''}>${d.name || d.id}</option>`
     ).join('');
 }
-
 function renderDeviceList(devices) {
     const container = DOM.deviceList;
     if (!container) return;
@@ -1383,11 +1198,9 @@ function renderDeviceList(devices) {
         container.innerHTML = '<p style="color:var(--text-tertiary);font-size:12px;padding:8px 0">Belum ada device terdaftar</p>';
         return;
     }
-
     const editSVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
     const checkSVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>`;
     const closeSVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
-
     container.innerHTML = devices.map(d => {
         const dotClass = d.online ? 'online' : 'offline';
         const phasesHTML = (d.phases && d.phases.length > 0)
@@ -1424,7 +1237,6 @@ function renderDeviceList(devices) {
             </div>`;
             }).join('')
             : '<p style="font-size:11px;color:var(--text-tertiary);padding:4px 0">Mendeteksi phase…</p>';
-
         return `
         <div class="device-item" id="device-item_${d.id}">
             <div class="device-view-mode" id="view_${d.id}">
@@ -1456,7 +1268,6 @@ function renderDeviceList(devices) {
         </div>`;
     }).join('');
 }
-
 function startRenameDevice(deviceId) {
     _renamingDeviceId = deviceId;
     $(`view_${deviceId}`).style.display = 'none';
@@ -1464,7 +1275,6 @@ function startRenameDevice(deviceId) {
     const input = $(`rename_${deviceId}`);
     input.focus(); input.select();
 }
-
 function cancelRenameDevice(deviceId) {
     _renamingDeviceId = null;
     const label = $(`label_${deviceId}`), input = $(`rename_${deviceId}`);
@@ -1473,7 +1283,6 @@ function cancelRenameDevice(deviceId) {
     $(`view_${deviceId}`).style.display = 'flex';
     input.disabled = false;
 }
-
 async function saveDeviceName(deviceId) {
     const input = $(`rename_${deviceId}`);
     const newName = input?.value.trim();
@@ -1481,9 +1290,7 @@ async function saveDeviceName(deviceId) {
     if (newName.length < 2) { await showModal('Error', 'Nama minimal 2 karakter', 'warning'); return; }
     if (newName.length > 100) { await showModal('Error', 'Nama maksimal 100 karakter', 'warning'); return; }
     if (/[\/\.\$\#\[\]]/.test(newName)) { await showModal('Error', 'Karakter tidak diizinkan: / . $ # [ ]', 'warning'); return; }
-
     const oldName = _deviceListCache.find(d => d.id === deviceId)?.name || deviceId;
-
     const dev = _deviceListCache.find(d => d.id === deviceId);
     if (dev) dev.name = newName;
     const label = $(`label_${deviceId}`);
@@ -1496,7 +1303,6 @@ async function saveDeviceName(deviceId) {
     _renamingDeviceId = null;
     cancelRenameDevice(deviceId);
     showModal('Berhasil', `Nama device diubah menjadi:\n"${newName}"`, 'success');
-
     try {
         const controller = new AbortController();
         const tid = setTimeout(() => controller.abort(), 8000);
@@ -1520,7 +1326,6 @@ async function saveDeviceName(deviceId) {
         await showModal('Error', e.name === 'AbortError' ? 'Request timeout (8s) - Periksa koneksi internet' : 'Gagal menyimpan: ' + e.message, 'error');
     }
 }
-
 async function onDeviceChange(deviceId) {
     if (!deviceId || deviceId === selectedDeviceId) return;
     if (_prevDeviceId) {
@@ -1536,10 +1341,8 @@ async function onDeviceChange(deviceId) {
         dayFirebaseData = {};
     }
     if (_chartTimer) { clearInterval(_chartTimer); _chartTimer = null; }
-
     selectedDeviceId = deviceId;
     selectedDeviceName = _deviceListCache.find(d => d.id === deviceId)?.name || deviceId;
-
     selectedPhase = '';
     updatePhaseSelector([]);
     resetChartData();
@@ -1549,13 +1352,10 @@ async function onDeviceChange(deviceId) {
     updateConnectionStatus(false);
     updateDisplayCardsBlank();
     lastDataTimestamp = 0;
-
     historyData = []; recordsBySession = {}; sessionsData = {};
     buildSessionUI();
-
     fetch(`/api/devices/${deviceId}/init-sensors`, { method: 'POST' })
         .then(r => r.json()).then(json => { if (json.phases) loadDevices(); }).catch(() => {});
-
     _attachRealtimeListener(deviceId);
     _attachHistoryListener(deviceId);
     _attachDeviceNameListener(deviceId);
@@ -1563,7 +1363,6 @@ async function onDeviceChange(deviceId) {
     _attachHourlyListener(deviceId);
     _attachDayListener(deviceId);
 }
-
 function startRenamePhase(deviceId, phase) {
     const id = `${deviceId}_${phase}`;
     $(`phase-view_${id}`).style.display = 'none';
@@ -1571,7 +1370,6 @@ function startRenamePhase(deviceId, phase) {
     const input = $(`phase-rename_${id}`);
     input.focus(); input.select();
 }
-
 function cancelRenamePhase(deviceId, phase) {
     const id = `${deviceId}_${phase}`;
     const label = $(`phase-label_${id}`), input = $(`phase-rename_${id}`);
@@ -1580,7 +1378,6 @@ function cancelRenamePhase(deviceId, phase) {
     $(`phase-view_${id}`).style.display = 'flex';
     input.disabled = false;
 }
-
 async function savePhaseRename(deviceId, phase) {
     const id = `${deviceId}_${phase}`;
     const input = $(`phase-rename_${id}`);
@@ -1589,11 +1386,9 @@ async function savePhaseRename(deviceId, phase) {
     if (newName.length < 2) { await showModal('Error', 'Nama minimal 2 karakter', 'warning'); return; }
     if (newName.length > 40) { await showModal('Error', 'Nama maksimal 40 karakter', 'warning'); return; }
     if (/[\/\.\$\#\[\]]/.test(newName)) { await showModal('Error', 'Karakter tidak diizinkan: / . $ # [ ]', 'warning'); return; }
-
     const dev = _deviceListCache.find(d => d.id === deviceId);
     const phaseObj = dev?.phases?.find(p => p.phase === phase);
     const oldName = phaseObj?.name || phase;
-
     if (phaseObj) phaseObj.name = newName;
     const label = $(`phase-label_${id}`);
     if (label) label.textContent = newName;
@@ -1601,7 +1396,6 @@ async function savePhaseRename(deviceId, phase) {
     if (dev?.phases) updatePhaseSelector(dev.phases.map(p => p.phase));
     if ($('historyContent')?.classList.contains('active')) buildSessionUI();
     showModal('Berhasil', `Fase ${phase} diubah menjadi:\n"${newName}"`, 'success');
-
     try {
         const controller = new AbortController();
         const tid = setTimeout(() => controller.abort(), 8000);
@@ -1622,11 +1416,9 @@ async function savePhaseRename(deviceId, phase) {
         await showModal('Error', e.name === 'AbortError' ? 'Request timeout (8s) - Periksa koneksi' : 'Gagal menyimpan: ' + e.message, 'error');
     }
 }
-
 async function togglePhaseEnabled(deviceId, phase, enabled) {
     const dev = _deviceListCache.find(d => d.id === deviceId);
     const phaseObj = dev?.phases?.find(p => p.phase === phase);
-
     if (!enabled && dev?.phases) {
         const stillEnabled = dev.phases.filter(p => p.phase !== phase && p.enabled !== false);
         if (stillEnabled.length === 0) {
@@ -1636,35 +1428,27 @@ async function togglePhaseEnabled(deviceId, phase, enabled) {
             return;
         }
     }
-
     if (phaseObj) phaseObj.enabled = enabled;
-
     const item = $(`phase-item_${deviceId}_${phase}`);
     if (item) item.classList.toggle('phase-disabled', !enabled);
-
     const badge = item?.querySelector('.device-phase-badge');
     if (badge) badge.style.opacity = enabled ? '' : '0.4';
-
     const nameEl = $(`phase-label_${deviceId}_${phase}`);
     if (nameEl) {
         nameEl.style.opacity = enabled ? '' : '0.45';
         nameEl.style.textDecoration = enabled ? '' : 'line-through';
     }
-
     const statusEl = item?.querySelector('.device-phase-status');
     if (statusEl) statusEl.innerHTML = enabled
         ? '<span style="color:var(--green);font-weight:700">● Aktif</span>'
         : '<span style="color:var(--text-tertiary)">○ Nonaktif</span>';
-
     if (deviceId === selectedDeviceId && dev?.phases) {
         const enabledPhases = dev.phases.filter(p => p.enabled !== false).map(p => p.phase);
         updatePhaseSelector(enabledPhases);
     }
-
     if (deviceId === selectedDeviceId) {
         _rebuildChart();
     }
-
     try {
         await fetch(`/api/devices/${deviceId}/sensors/${phase}/enabled`, {
             method: 'POST',
@@ -1678,25 +1462,19 @@ async function togglePhaseEnabled(deviceId, phase, enabled) {
         if (deviceId === selectedDeviceId) _rebuildChart();
     }
 }
-
 function _attachRealtimeListener(deviceId) {
     _prevDeviceId = deviceId;
     _chartInit(deviceId);
-
     let _firstSnap = true;
     let _lastPhaseCount = Object.keys(phaseChartData).filter(k => /^L\d+$/.test(k)).length;
-
     database.ref(`devices/${deviceId}/RealTime`).on('value', snapshot => {
         if (!snapshot.exists()) { updateConnectionStatus(false); return; }
         const raw = snapshot.val();
         const data = normalizeFirebaseData(raw);
         if (!data) { updateConnectionStatus(false); return; }
-
         if (_firstSnap) { _firstSnap = false; return; }
-
         const isZero = data.Voltage === 0 && data.Current === 0 && data.Power === 0;
         if (isZero) { updateConnectionStatus(false); return; }
-
         const currentPhaseCount = (data._phases || []).length;
         if (currentPhaseCount !== _lastPhaseCount && currentPhaseCount > 0) {
             _lastPhaseCount = currentPhaseCount;
@@ -1704,22 +1482,18 @@ function _attachRealtimeListener(deviceId) {
             fetch(`/api/devices/${deviceId}/init-sensors`, { method: 'POST' })
                 .then(r => r.json()).then(() => loadDevices()).catch(() => {});
         }
-
         lastDataTimestamp = Date.now();
         rawRealtimeData = raw;
         realtimeData = data;
         isConnected = true;
-
         if (selectedPhase) {
             const displayData = getPhaseDisplayData(raw, selectedPhase);
             if (displayData) updateDisplayCards(displayData);
             else updateDisplayCardsBlank();
         }
-
         updateConnectionStatus(true);
     }, () => updateConnectionStatus(false));
 }
-
 function updateConnectionStatus(connected) {
     const dot = DOM.statusDot, txt = DOM.statusText;
     if (!dot || !txt) return;
@@ -1728,7 +1502,6 @@ function updateConnectionStatus(connected) {
     txt.textContent = connected ? 'ONLINE' : 'OFFLINE';
     if (!connected) updateDisplayCardsBlank();
 }
-
 function checkDataFreshness() {
     const age = Date.now() - lastDataTimestamp;
     if (isConnected && (lastDataTimestamp === 0 || age > 3000)) {
@@ -1736,18 +1509,15 @@ function checkDataFreshness() {
         updateConnectionStatus(false);
     }
 }
-
 function startConnectionMonitoring() {
     if (connectionCheckInterval) clearInterval(connectionCheckInterval);
     connectionCheckInterval = setInterval(checkDataFreshness, 2000);
 }
-
 function onDbSearchInput(value) {
     dbSearchQuery = value.trim().toLowerCase();
     $('dbSearchClear')?.classList.toggle('visible', dbSearchQuery.length > 0);
     buildSessionUI();
 }
-
 function clearDbSearch() {
     const input = $('dbSearchInput');
     if (input) input.value = '';
@@ -1756,9 +1526,7 @@ function clearDbSearch() {
     buildSessionUI();
     input?.focus();
 }
-
 let historyData = [], recordsBySession = {};
-
 function _attachHistoryListener(deviceId) {
     database.ref(`devices/${deviceId}/History`).on('value', snap => {
         historyData = []; recordsBySession = {}; sessionsData = {};
@@ -1789,7 +1557,6 @@ function _attachHistoryListener(deviceId) {
         buildSessionUI();
     });
 }
-
 function _attachDeviceNameListener(deviceId) {
     database.ref(`devices/${deviceId}/meta/name`).on('value', snapshot => {
         if (!snapshot.exists()) return;
@@ -1804,18 +1571,15 @@ function _attachDeviceNameListener(deviceId) {
         if (label) label.textContent = newName;
     });
 }
-
 function _attachPhasesListener(deviceId) {
     database.ref(`devices/${deviceId}/meta/sensors`).on('value', snapshot => {
         if (!snapshot.exists()) return;
         const sensorsData = snapshot.val();
         const dev = _deviceListCache.find(d => d.id === deviceId);
         if (!dev) return;
-
         const phaseKeys = Object.keys(sensorsData)
             .filter(k => /^L\d+$/.test(k))
             .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
-
         dev.phases = phaseKeys.map(phase => ({
             phase,
             name: sensorsData[phase]?.name || phase,
@@ -1823,18 +1587,15 @@ function _attachPhasesListener(deviceId) {
             enabled: sensorsData[phase]?.enabled !== false,
         }));
         dev.phaseCount = dev.phases.length;
-
         if (deviceId === selectedDeviceId) {
             const enabledPhases = dev.phases.filter(p => p.enabled).map(p => p.phase);
             updatePhaseSelector(enabledPhases);
         }
-
         const visible = _deviceListCache.filter(d => d.id !== 'alat1');
         renderDeviceList(visible);
         if ($('historyContent')?.classList.contains('active')) buildSessionUI();
     });
 }
-
 function parseTimestamp(ts) {
     try {
         const [time, date] = ts.split(' ');
@@ -1843,36 +1604,29 @@ function parseTimestamp(ts) {
         return new Date(y, mo - 1, d, h, m, s);
     } catch (_) { return new Date(); }
 }
-
 function _escapeAttr(s) { return (s || '').replace(/'/g, "\\'"); }
 function _highlight(text) {
     if (!dbSearchQuery) return text;
     return text.replace(new RegExp(`(${dbSearchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'), '<mark class="search-highlight">$1</mark>');
 }
-
 function buildSessionUI() {
     const allSessions = Object.values(sessionsData).sort((a, b) => (b.startTimestamp || 0) - (a.startTimestamp || 0));
     const filtered = dbSearchQuery ? allSessions.filter(s => (s.name || s.id || '').toLowerCase().includes(dbSearchQuery)) : allSessions;
-
     if (DOM.historyCount) {
         DOM.historyCount.textContent = dbSearchQuery
             ? `${filtered.length} dari ${allSessions.length} sesi · ${historyData.length} total record`
             : `${allSessions.length} sesi · ${historyData.length} total record`;
     }
-
     const tbody = DOM.historyBody;
     if (!tbody) return;
-
     if (!filtered.length) {
         tbody.innerHTML = `<tr><td colspan="5" class="loading-cell">${dbSearchQuery ? 'Tidak ada sesi yang cocok.' : 'Belum ada data rekaman'}</td></tr>`;
         return;
     }
-
     const openSessions = new Set();
     const openPhases = new Set();
     document.querySelectorAll('.session-detail-row').forEach(row => { if (row.style.display !== 'none') openSessions.add(row.id.replace('detail_', '')); });
     document.querySelectorAll('[id^="phase-detail_"]').forEach(el => { if (el.style.display !== 'none') openPhases.add(el.id.replace('phase-detail_', '')); });
-
     const editingPhases = new Map();
     document.querySelectorAll('[id^="sph-edit_"]').forEach(el => {
         if (el.style.display !== 'none') {
@@ -1881,29 +1635,23 @@ function buildSessionUI() {
             editingPhases.set(key, inputEl ? inputEl.value : '');
         }
     });
-
     tbody.innerHTML = filtered.map(session => {
         const frozenNames = session.phaseNames || {};
-
         const recordedPhaseKeys = Object.keys(recordsBySession[session.id] || {})
             .filter(k => /^L\d+$/.test(k))
             .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
-
         const phaseSourceKeys = recordedPhaseKeys.length > 0
             ? recordedPhaseKeys
             : Object.keys(frozenNames)
                   .filter(k => /^L\d+$/.test(k))
                   .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
-
         const dev2 = _deviceListCache.find(d => d.id === selectedDeviceId);
         const phases = phaseSourceKeys.map(ph => {
             const cachedName = dev2?.phases?.find(p => p.phase === ph)?.name;
             return { phase: ph, name: frozenNames[ph] || cachedName || ph };
         });
-
         const allPhaseRecords = Object.values(recordsBySession[session.id] || {}).flat();
         const isActive = session.id === currentSessionId && captureActive;
-
         const actionBtns = isActive ? '' : `
             <button class="session-export-btn" onclick="exportSession('${session.id}','${_escapeAttr(session.name)}',event)" title="Export">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
@@ -1914,7 +1662,6 @@ function buildSessionUI() {
             <button class="session-delete-btn" onclick="deleteSession('${session.id}','${_escapeAttr(session.name)}',event)" title="Hapus">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6m4-6v6"></path></svg>
             </button>`;
-
         const phaseBlocks = phases.map(p => `
             <div class="session-phase-block" id="phase-block_${session.id}_${p.phase}">
                 <div class="session-phase-header" id="sph-view_${session.id}_${p.phase}"
@@ -1970,7 +1717,6 @@ function buildSessionUI() {
                     })()}
                 </div>
             </div>`).join('');
-
         return `
         <tr class="session-row${isActive ? ' session-active' : ''}" onclick="toggleSessionDetail('${session.id}')">
             <td class="session-toggle-cell">
@@ -1999,7 +1745,6 @@ function buildSessionUI() {
             </td>
         </tr>`;
     }).join('');
-
     openSessions.forEach(sid => {
         const detail = $(`detail_${sid}`), chevron = $(`chevron_${sid}`);
         if (detail)  detail.style.display  = 'table-row';
@@ -2010,7 +1755,6 @@ function buildSessionUI() {
         if (detail)  detail.style.display = 'block';
         if (chevron) chevron.textContent   = '\u25BC';
     });
-
     editingPhases.forEach((inputValue, key) => {
         const viewEl = document.getElementById('sph-view_' + key);
         const editEl = document.getElementById('sph-edit_' + key);
@@ -2026,7 +1770,6 @@ function buildSessionUI() {
         }
     });
 }
-
 function toggleSessionDetail(sessionId) {
     const detail = $(`detail_${sessionId}`), chevron = $(`chevron_${sessionId}`);
     if (!detail) return;
@@ -2034,7 +1777,6 @@ function toggleSessionDetail(sessionId) {
     detail.style.display = isOpen ? 'none' : 'table-row';
     if (chevron) chevron.textContent = isOpen ? '\u25B6' : '\u25BC';
 }
-
 function togglePhaseDetails(sessionId, phase) {
     const detail = $(`phase-detail_${sessionId}_${phase}`), chevron = $(`chevron_${sessionId}_${phase}`);
     if (!detail) return;
@@ -2042,7 +1784,6 @@ function togglePhaseDetails(sessionId, phase) {
     detail.style.display = isOpen ? 'none' : 'block';
     if (chevron) chevron.textContent = isOpen ? '▶' : '▼';
 }
-
 (function _injectSphHoverStyle() {
     if (document.getElementById('sph-hover-style')) return;
     const s = document.createElement('style');
@@ -2061,7 +1802,6 @@ function togglePhaseDetails(sessionId, phase) {
     `;
     document.head.appendChild(s);
 })();
-
 function startRenameSessionPhase(sessionId, phase) {
     const viewEl = $(`sph-view_${sessionId}_${phase}`);
     const editEl = $(`sph-edit_${sessionId}_${phase}`);
@@ -2072,7 +1812,6 @@ function startRenameSessionPhase(sessionId, phase) {
     inputEl?.focus();
     inputEl?.select();
 }
-
 function cancelRenameSessionPhase(sessionId, phase) {
     const viewEl = $(`sph-view_${sessionId}_${phase}`);
     const editEl = $(`sph-edit_${sessionId}_${phase}`);
@@ -2082,13 +1821,11 @@ function cancelRenameSessionPhase(sessionId, phase) {
     if (editEl)  editEl.style.display  = 'none';
     if (viewEl)  viewEl.style.display  = 'flex';
 }
-
 async function saveRenameSessionPhase(sessionId, phase) {
     const inputEl = $(`sph-input_${sessionId}_${phase}`);
     const labelEl = $(`sph-label_${sessionId}_${phase}`);
     const newName = inputEl?.value.trim();
     const oldName = labelEl?.textContent || phase;
-
     if (!newName) {
         await showModal('Nama Kosong', 'Nama fase tidak boleh kosong.', 'warning');
         inputEl?.focus();
@@ -2099,24 +1836,19 @@ async function saveRenameSessionPhase(sessionId, phase) {
         inputEl?.focus();
         return;
     }
-
     cancelRenameSessionPhase(sessionId, phase);
     if (labelEl) labelEl.textContent = newName;
-
     if (sessionsData[sessionId]) {
         if (!sessionsData[sessionId].phaseNames) sessionsData[sessionId].phaseNames = {};
         sessionsData[sessionId].phaseNames[phase] = newName;
     }
-
     try {
         const phaseKeys = Object.keys(recordsBySession[sessionId] || {})
             .filter(k => /^L\d+$/.test(k));
-
         if (!phaseKeys.length) {
             await showModal('Error', 'Tidak ada data phase untuk diperbarui.', 'error');
             return;
         }
-
         const update = { [`phaseNames/${phase}`]: newName };
         await Promise.all(
             phaseKeys.map(ph =>
@@ -2124,7 +1856,6 @@ async function saveRenameSessionPhase(sessionId, phase) {
                     .update(update)
             )
         );
-
         await showModal('Berhasil', `Nama fase ${phase} di sesi ini diubah menjadi:\n"${newName}"`, 'success');
     } catch (e) {
         if (labelEl) labelEl.textContent = oldName;
@@ -2134,19 +1865,16 @@ async function saveRenameSessionPhase(sessionId, phase) {
         await showModal('Error', 'Gagal menyimpan: ' + e.message, 'error');
     }
 }
-
 function getDevicePhasesWithNames() {
     if (!selectedDeviceId) return [];
     const dev = _deviceListCache.find(d => d.id === selectedDeviceId);
     if (!dev?.phases?.length) return [];
     return dev.phases.filter(p => p.enabled !== false).map(p => ({ phase: p.phase, name: p.name }));
 }
-
 const COL_WIDTHS = [
     { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 10 }, { wch: 13 }, { wch: 13 }, { wch: 13 },
     { wch: 20 }, { wch: 20 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 22 }, { wch: 22 },
 ];
-
 function _buildExcelRow(entry, deviceName) {
     const row = {};
     row['Device Name']             = deviceName;
@@ -2165,25 +1893,20 @@ function _buildExcelRow(entry, deviceName) {
     row['Reactive Energy (kVARh)'] = entry.EnergyReactive != null ? +entry.EnergyReactive.toFixed(4): '';
     return row;
 }
-
 async function exportSession(sessionId, sessionName, event) {
     event.stopPropagation();
     const phaseData    = recordsBySession[sessionId] || {};
     const phaseKeys    = Object.keys(phaseData).filter(k => /^L\d+$/.test(k)).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
     const totalRecords = phaseKeys.reduce((s, ph) => s + (phaseData[ph]?.length || 0), 0);
-
     if (!phaseKeys.length || totalRecords === 0) { await showModal('Tidak Ada Data', `Sesi "${sessionName}" belum memiliki record.`, 'warning'); return; }
-
     const confirmed = await showModal('Export Sesi',
         `Ekspor ${totalRecords} record (${phaseKeys.length} phase) dari sesi:\n"${sessionName}"\n\nData Firebase TIDAK dihapus. Lanjutkan?`, 'info', ['confirm']);
     if (!confirmed) return;
-
     try {
         const session    = sessionsData[sessionId];
         const deviceName = session?.deviceName || _deviceListCache.find(d => d.id === (session?.deviceId || selectedDeviceId))?.name || selectedDeviceId;
         const wb         = XLSX.utils.book_new();
         const frozenNames  = session.phaseNames || {};
-
         for (const phase of phaseKeys) {
             const phaseRecs    = (phaseData[phase] || []).slice().sort((a, b) => parseTimestamp(a.timestamp) - parseTimestamp(b.timestamp));
             const phaseDevName = frozenNames[phase] || phase;
@@ -2191,12 +1914,10 @@ async function exportSession(sessionId, sessionName, event) {
             ws['!cols']        = COL_WIDTHS;
             XLSX.utils.book_append_sheet(wb, ws, phaseDevName);
         }
-
         const allRecords = Object.values(phaseData).flat();
         const onlineRows = allRecords.filter(e => !e.offline);
         const avg = f => onlineRows.length ? onlineRows.reduce((s, e) => s + (e[f] || 0), 0) / onlineRows.length : 0;
         const sum = f => onlineRows.reduce((s, e) => s + (e[f] || 0), 0);
-
         const wsMeta = XLSX.utils.aoa_to_sheet([
             ['Smart Energy Monitor - Session Export'], [''],
             ['Nama Sesi', sessionName], ['Export Date', new Date().toLocaleString('id-ID')],
@@ -2215,12 +1936,10 @@ async function exportSession(sessionId, sessionName, event) {
         ]);
         wsMeta['!cols'] = [{ wch: 28 }, { wch: 28 }, { wch: 10 }];
         XLSX.utils.book_append_sheet(wb, wsMeta, 'Summary');
-
         XLSX.writeFile(wb, `${sessionName.replace(/[\\/:*?"<>|]/g, '_')}.xlsx`);
         await showModal('Export Berhasil!', `${totalRecords} record dari "${sessionName}" berhasil diekspor.`, 'success');
     } catch (e) { await showModal('Export Gagal', 'Error: ' + e.message, 'error'); }
 }
-
 async function clearRecords() {
     if (!historyData.length && !Object.keys(sessionsData).length) { await showModal('Tidak Ada Data', 'Tidak ada history yang perlu dihapus.', 'info'); return; }
     const confirmed = await showModal('Konfirmasi Hapus Record', `Hapus SEMUA sesi & record device "${selectedDeviceName}"?\n\nData TIDAK DAPAT dikembalikan.`, 'warning', ['confirm']);
@@ -2232,17 +1951,14 @@ async function clearRecords() {
         await showModal('Berhasil Dihapus', 'Semua data rekaman telah dihapus.', 'success');
     } catch (e) { await showModal('Error', 'Gagal menghapus! Error: ' + e.message, 'error'); }
 }
-
 let captureActive = false;
 let captureInterval = 3000;
 let _captureTransitioning = false;
 let _captureStatusPollId = null;
 let _intervalUserEdited = false;
-
 async function syncCaptureStatus() {
     try {
         const status = await fetch('/api/capture/status').then(r => r.json());
-
         if (!_captureTransitioning) {
             if (status.active) {
                 captureActive = true;
@@ -2254,7 +1970,6 @@ async function syncCaptureStatus() {
                 _updateCaptureButtonUI(false);
             }
         }
-
         if (!_captureTransitioning && !_intervalUserEdited) {
             const serverSec = status.interval || 3;
             captureInterval = serverSec * 1000;
@@ -2266,26 +1981,21 @@ async function syncCaptureStatus() {
             if (DOM.intervalDisplay)
                 DOM.intervalDisplay.textContent = `Current: ${serverSec} seconds`;
         }
-
         buildSessionUI();
     } catch (e) {}
 }
-
 function _startStatusPolling() {
     if (_captureStatusPollId) return;
     _captureStatusPollId = setInterval(syncCaptureStatus, 4000);
 }
-
 const CAPTURE_START_HTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> Start Capture`;
 const CAPTURE_STOP_HTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg> Stop Capture`;
-
 function _updateCaptureButtonUI(active) {
     const btn = DOM.captureBtn;
     if (!btn) return;
     btn.classList.toggle('active', active);
     btn.innerHTML = active ? CAPTURE_STOP_HTML : CAPTURE_START_HTML;
 }
-
 async function toggleCapture() {
     if (!captureActive) {
         if (!selectedDeviceId) { await showModal('Pilih Device', 'Pilih device terlebih dahulu.', 'warning'); return; }
@@ -2296,14 +2006,12 @@ async function toggleCapture() {
         if (confirmed) await _apiStopCapture();
     }
 }
-
 async function _apiStopCapture() {
     captureActive = false;
     currentSessionId = null;
     _captureTransitioning = true;
     _updateCaptureButtonUI(false);
     buildSessionUI();
-
     try {
         const json = await fetch('/api/capture/stop', { method: 'POST' })
             .then(r => r.json());
@@ -2316,7 +2024,6 @@ async function _apiStopCapture() {
         _captureTransitioning = false;
     }
 }
-
 function openSessionNameModal() {
     const input = $('sessionNameInput');
     const now = new Date(), pad = v => String(v).padStart(2, '0');
@@ -2326,14 +2033,12 @@ function openSessionNameModal() {
     document.body.style.overflow = 'hidden';
     setTimeout(() => { input.focus(); input.select(); }, 120);
 }
-
 function closeSessionNameModal() {
     $('sessionNameModal').classList.remove('active');
     document.body.style.overflow = '';
     _renamingSessionId = null;
     _resetSessionModal();
 }
-
 function _resetSessionModal() {
     const modal = $('sessionNameModal');
     if (!modal) return;
@@ -2342,7 +2047,6 @@ function _resetSessionModal() {
     const btn = modal.querySelector('.modal-btn-primary');
     btn.innerHTML = '&#9654; MULAI REKAM'; btn.onclick = confirmStartCapture;
 }
-
 function openRenameModal(sessionId, currentName, event) {
     event.stopPropagation();
     _renamingSessionId = sessionId;
@@ -2356,7 +2060,6 @@ function openRenameModal(sessionId, currentName, event) {
     document.body.style.overflow = 'hidden';
     setTimeout(() => { $('sessionNameInput').focus(); $('sessionNameInput').select(); }, 120);
 }
-
 async function confirmRenameSession() {
     const newName = $('sessionNameInput')?.value.trim();
     const targetId = _renamingSessionId;
@@ -2373,28 +2076,23 @@ async function confirmRenameSession() {
         await showModal('Berhasil', `Nama sesi diubah menjadi:\n"${newName}"`, 'success');
     } catch (e) { await showModal('Error', 'Gagal mengubah nama! Error: ' + e.message, 'error'); }
 }
-
 async function confirmStartCapture() {
     const sessionName = $('sessionNameInput')?.value.trim()
         || `Rekaman ${new Date().toLocaleTimeString('id-ID')}`;
     const intervalSec = Math.round(captureInterval / 1000) || 3;
     closeSessionNameModal();
-
     const activeDev = _deviceListCache.find(d => d.id === selectedDeviceId);
     const phasesHint = (activeDev?.phases || []).filter(p => p.enabled !== false).map(p => p.phase);
-
     captureActive = true;
     currentSessionId = null;
     _captureTransitioning = true;
     _updateCaptureButtonUI(true);
     buildSessionUI();
-
     showModal(
         'Capture Diaktifkan',
         `Sesi: "${sessionName}"\nDevice: ${selectedDeviceName}\n\nRekaman berjalan di server.\nInterval: ${intervalSec}s`,
         'success'
     );
-
     try {
         const json = await fetch('/api/capture/start', {
             method: 'POST',
@@ -2407,7 +2105,6 @@ async function confirmStartCapture() {
                 phases: phasesHint,
             }),
         }).then(r => r.json());
-
         if (!json.ok) {
             captureActive = false;
             currentSessionId = null;
@@ -2417,10 +2114,8 @@ async function confirmStartCapture() {
             await showModal('Error', 'Gagal memulai capture: ' + (json.error || ''), 'error');
             return;
         }
-
         currentSessionId = json.session_id;
         buildSessionUI();
-
     } catch (e) {
         captureActive = false;
         currentSessionId = null;
@@ -2432,7 +2127,6 @@ async function confirmStartCapture() {
         _captureTransitioning = false;
     }
 }
-
 async function deleteSession(sessionId, sessionName, event) {
     event.stopPropagation();
     const confirmed = await showModal('Hapus Sesi', `Hapus sesi:\n"${sessionName}"\n\nSemua record akan ikut terhapus.`, 'warning', ['confirm']);
@@ -2451,7 +2145,6 @@ async function deleteSession(sessionId, sessionName, event) {
         await showModal('Sesi Dihapus', `Sesi "${sessionName}" berhasil dihapus.`, 'success');
     } catch (e) { await showModal('Error', 'Gagal menghapus! Error: ' + e.message, 'error'); }
 }
-
 async function setCaptureInterval() {
     const val = parseInt($('intervalInput')?.value);
     const multiplier = parseInt($('intervalUnit')?.value);
@@ -2461,7 +2154,6 @@ async function setCaptureInterval() {
     _intervalUserEdited = true;
     const unitLabel = $('intervalUnit')?.options[$('intervalUnit').selectedIndex]?.text.toLowerCase() || 'seconds';
     if (DOM.intervalDisplay) DOM.intervalDisplay.textContent = multiplier === 1 ? `Current: ${val} seconds` : `Current: ${val} ${unitLabel} (${totalSec}s)`;
-
     try {
         await fetch('/api/capture/interval', {
             method: 'POST',
@@ -2469,29 +2161,22 @@ async function setCaptureInterval() {
             body: JSON.stringify({ interval: totalSec }),
         });
     } catch (e) {}
-
     await showModal('Interval Diperbarui', `Interval diubah menjadi ${val} ${unitLabel}.`, 'success');
 }
-
 document.addEventListener('DOMContentLoaded', async () => {
     initChart();
-
     DOM.paramSelect?.addEventListener('change', changeParameter);
     document.querySelectorAll('.metric-card-compact[data-param]').forEach(card => {
         card.addEventListener('click', () => _switchParameter(card.dataset.param));
         card.classList.toggle('card-active', card.dataset.param === selectedParameter);
     });
-
     await loadDevices();
     setInterval(loadDevices, 30_000);
-
     updateConnectionStatus(false);
     startConnectionMonitoring();
     startTimeWindowMonitoring();
-
     await syncCaptureStatus();
     _startStatusPolling();
-
     $('intervalInput')?.addEventListener('focus', () => { _intervalUserEdited = true; });
     $('intervalInput')?.addEventListener('input', () => { _intervalUserEdited = true; });
     $('intervalUnit')?.addEventListener('change', () => { _intervalUserEdited = true; });
@@ -2499,7 +2184,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Enter') { _renamingSessionId ? confirmRenameSession() : confirmStartCapture(); }
     });
 });
-
 window.addEventListener('beforeunload', () => {
     if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
     if (_chartTimer) { clearInterval(_chartTimer); _chartTimer = null; }

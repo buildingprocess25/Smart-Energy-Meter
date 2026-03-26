@@ -7,13 +7,10 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-
 <div class="background">
     <div class="glow-orb glow-orb-1"></div>
     <div class="glow-orb glow-orb-2"></div>
 </div>
-
-<!-- ===== HEADER ===== -->
 <header class="header">
     <div class="header-content">
         <a class="logo" href="#">
@@ -27,7 +24,6 @@
                 <span>Real-time Monitor</span>
             </div>
         </a>
-
         <div class="status-indicator">
             <div class="status-dot" id="statusDot"></div>
             <div class="status-text">
@@ -37,8 +33,6 @@
         </div>
     </div>
 </header>
-
-<!-- ===== NAV TABS ===== -->
 <nav class="nav-tabs">
     <div class="container">
         <button class="tab-btn active" id="realtimeTab" onclick="switchTab('realtime')">
@@ -63,12 +57,8 @@
         </button>
     </div>
 </nav>
-
-<!-- ===== MAIN ===== -->
 <main class="main-content">
     <div class="container">
-
-        <!-- ── SUMMARY TAB ── -->
         <div id="realtimeContent" class="tab-content active">
             <div class="summary-topbar">
                 <div class="summary-topbar-left">
@@ -77,19 +67,13 @@
                 </div>
                 <div class="last-update" id="lastUpdate">Waiting for data…</div>
             </div>
-
             <div class="dashboard-grid">
-                <!-- Metric Cards Column with Phase Selector -->
                 <div class="metrics-col-wrap">
-
-                    <!-- Phase Selector -->
                     <div class="phase-selector" id="phaseSelector">
                         <div class="phase-btn-group" id="phaseSelectorBtns">
                         </div>
                     </div>
-
                     <div class="metrics-column">
-
                         <div class="metric-card-compact" data-color="yellow" data-param="voltage">
                             <div class="metric-header-compact">
                                 <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -99,7 +83,6 @@
                             </div>
                             <div class="metric-value-compact"><span id="voltage">---</span><span class="metric-unit-compact">V</span></div>
                         </div>
-
                         <div class="metric-card-compact" data-color="blue" data-param="current">
                             <div class="metric-header-compact">
                                 <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -109,7 +92,6 @@
                             </div>
                             <div class="metric-value-compact"><span id="current">---</span><span class="metric-unit-compact">A</span></div>
                         </div>
-
                         <div class="metric-card-compact" data-color="green" data-param="power">
                             <div class="metric-header-compact">
                                 <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -120,7 +102,6 @@
                             </div>
                             <div class="metric-value-compact"><span id="power">---</span><span class="metric-unit-compact">W</span></div>
                         </div>
-
                         <div class="metric-card-compact" data-color="purple" data-param="frequency">
                             <div class="metric-header-compact">
                                 <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -131,7 +112,6 @@
                             </div>
                             <div class="metric-value-compact"><span id="frequency">---</span><span class="metric-unit-compact">Hz</span></div>
                         </div>
-
                         <div class="metric-card-compact" data-color="green" data-param="energy">
                             <div class="metric-header-compact">
                                 <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -141,7 +121,6 @@
                             </div>
                             <div class="metric-value-compact"><span id="energy">---</span><span class="metric-unit-compact">kWh</span></div>
                         </div>
-
                         <div class="metric-card-compact" data-color="purple" data-param="powerFactor">
                             <div class="metric-header-compact">
                                 <svg class="metric-icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -152,11 +131,8 @@
                             </div>
                             <div class="metric-value-compact"><span id="powerFactor">---</span></div>
                         </div>
-
-                    </div><!-- /metrics-column -->
-                </div><!-- /metrics-col-wrap -->
-
-                <!-- Chart -->
+                    </div>
+                </div>
                 <div class="chart-column">
                     <div class="chart-card">
                         <div class="chart-header">
@@ -186,12 +162,8 @@
                         </div>
                     </div>
                 </div>
-
-            </div><!-- /dashboard-grid -->
-        </div><!-- /realtimeContent -->
-
-
-        <!-- ── DATABASE TAB ── -->
+            </div>
+        </div>
         <div id="historyContent" class="tab-content">
             <div class="section-header">
                 <div class="section-header-left">
@@ -235,16 +207,9 @@
                 </div>
             </div>
         </div>
-
-
-        <!-- ── SETTINGS TAB ── -->
         <div id="settingsContent" class="tab-content">
             <div class="settings-layout">
-
-                <!-- Left column -->
                 <div class="settings-col">
-
-                    <!-- Card: Clear Records -->
                     <div class="control-card">
                         <div class="control-header">
                             <div class="control-icon">
@@ -269,8 +234,6 @@
                             </button>
                         </div>
                     </div>
-
-                    <!-- Card: Data Capture -->
                     <div class="control-card">
                         <div class="control-header">
                             <div class="control-icon">
@@ -295,8 +258,6 @@
                             </button>
                         </div>
                     </div>
-
-                    <!-- Card: Capture Interval -->
                     <div class="control-card">
                         <div class="control-header">
                             <div class="control-icon">
@@ -328,13 +289,9 @@
                             </div>
                         </div>
                     </div>
-
-                </div><!-- /settings-col left -->
-
-                <!-- Right column: Device Manager -->
+                </div>
                 <div class="settings-col settings-col-wide">
                     <div class="control-card control-card-fill">
-
                         <div class="control-header">
                             <div class="control-icon">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -347,10 +304,7 @@
                                 <p>Pilih, lihat status, dan ganti nama perangkat terdaftar</p>
                             </div>
                         </div>
-
                         <div class="control-divider"></div>
-
-                        <!-- Active device selector -->
                         <div class="settings-device-selector-wrap">
                             <div class="settings-device-selector-left">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -363,24 +317,16 @@
                                 <option value="">Memuat device…</option>
                             </select>
                         </div>
-
                         <div class="control-divider"></div>
-
                         <div id="deviceList" class="device-list">
                             <p style="color:var(--text-tertiary);font-size:12px">Memuat daftar device…</p>
                         </div>
-
                     </div>
                 </div>
-
-            </div><!-- /settings-layout -->
-        </div><!-- /settingsContent -->
-
-    </div><!-- /container -->
+            </div>
+        </div>
+    </div>
 </main>
-
-
-<!-- ===== MODAL: General ===== -->
 <div id="customModal" class="modal-overlay">
     <div class="modal-container">
         <button class="modal-close" onclick="closeModal()">&times;</button>
@@ -394,8 +340,6 @@
         </div>
     </div>
 </div>
-
-<!-- ===== MODAL: Session Name ===== -->
 <div id="sessionNameModal" class="modal-overlay">
     <div class="modal-container">
         <button class="modal-close" onclick="closeSessionNameModal()">&times;</button>
@@ -416,9 +360,6 @@
         </div>
     </div>
 </div>
-
-
-<!-- ===== LIBRARIES ===== -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
@@ -428,6 +369,5 @@
 <script id="firebase-config" type="application/json">{{ firebase_config | tojson }}</script>
 <script>const firebaseConfig = JSON.parse(document.getElementById('firebase-config').textContent);</script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
-
 </body>
 </html>
