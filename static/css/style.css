@@ -333,7 +333,7 @@ body {
     box-shadow: 0 0 0 3px rgba(187,23,36,0.10) !important;
     background: var(--surface) !important;
 }
-.chart-container { flex: 1; position: relative; min-height: 0; }
+.chart-container { flex: 1; position: relative; min-height: 320px; }
 .chart-container canvas { width: 100% !important; height: 100% !important; cursor: crosshair; }
 .time-filter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .time-filter-group {

@@ -81,14 +81,14 @@ let _rebuildTimer = null;
 let _chartEntryAnimate = false;
 let _clipPathCleanupId = null;
 function _rebuildChart(animate = false) {
-    if (_rebuildTimer) clearTimeout(_rebuildTimer);
-    _chartEntryAnimate = animate;
-    _rebuildTimer = setTimeout(() => {
+    if (_rebuildTimer) {
+        clearTimeout(_rebuildTimer);
         _rebuildTimer = null;
-        if (realtimeChart) { realtimeChart.destroy(); realtimeChart = null; }
-        initChart();
-        _startAggRebuild();
-    }, 80);
+    }
+    _chartEntryAnimate = animate;
+    if (realtimeChart) { realtimeChart.destroy(); realtimeChart = null; }
+    initChart();
+    _startAggRebuild();
 }
 let _lastChartMinute = -1;
 let _lastChartHour = -1;
