@@ -64,7 +64,7 @@ def validate_device_name(name: str) -> tuple[bool, str]:
     if not name or not isinstance(name, str): return False, 'Nama harus berupa text'
     name = name.strip()
     if not name:        return False, 'Nama tidak boleh kosong'
-    if len(name) < 2:   return False, 'Nama minimal 2 karakter'
+    if len(name) < 2:   return False, 'Nama minimal 2 karakter' 
     if len(name) > 100: return False, 'Nama maksimal 100 karakter'
     if any(c in name for c in '/.$#[]'): return False, 'Karakter tidak diizinkan: / . $ # [ ]'
     return True, ''
@@ -101,7 +101,7 @@ def _do_hourly_capture_device(device_id: str) -> None:
             def f(k):
                 try: return float(pd.get(k) or 0)
                 except: return 0.0
-            fb_put(f'devices/{device_id}/HourlyCapture/{ph}/{key}', {
+            fb_put(f'devices/{device_id}/HourlyCapture/{date_str}/{ph}/{key}', {
                 'date': date_str, 'key': key, 'timestamp': ts,
                 'Voltage': f('Voltage (V)'), 'Current': f('Current (A)'), 'Power': f('Power (W)'),
                 'Apparent': f('Apparent Power (kVA)'), 'Reactive': f('Reactive Power (kVAR)'),
@@ -111,11 +111,18 @@ def _do_hourly_capture_device(device_id: str) -> None:
         ts_list = [threading.Thread(target=_w, args=(ph,), daemon=True) for ph in phases]
         for t in ts_list: t.start()
         for t in ts_list: t.join(timeout=8)
+        
+        all_hourly_dates = fb_get(f'devices/{device_id}/HourlyCapture') or {}
+        if isinstance(all_hourly_dates, dict):
+            old_dates = sorted([k for k in all_hourly_dates.keys() if '-' in k])
+            for old_date in old_dates[:-30]:
+                fb_delete(f'devices/{device_id}/HourlyCapture/{old_date}')
+
     except Exception: pass
 def _do_day_capture_device(device_id: str) -> None:
     try:
         today  = datetime.now().strftime('%Y-%m-%d')
-        hourly = fb_get(f'devices/{device_id}/HourlyCapture') or {}
+        hourly = fb_get(f'devices/{device_id}/HourlyCapture/{today}') or {}
         phases = sorted([k for k in hourly if _PHASE_RE.match(k)], key=lambda x: int(x[1:]))
         for ph in phases:
             entries = [v for v in (hourly.get(ph) or {}).values() if isinstance(v, dict) and v.get('date') == today]
@@ -130,7 +137,7 @@ def _do_day_capture_device(device_id: str) -> None:
                 'Frequency': avg('Frequency'), 'PowerFactor': avg('PowerFactor'), 'Phase1': avg('Phase1'),
             })
             all_days = fb_get(f'devices/{device_id}/DayCapture/{ph}') or {}
-            for old in sorted(all_days)[:-7]:
+            for old in sorted(all_days)[:-30]:
                 fb_delete(f'devices/{device_id}/DayCapture/{ph}/{old}')
     except Exception: pass
 def _chain_capture_and_day(device_id: str) -> None:
@@ -184,6 +191,7 @@ def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_ch
         with _capture_lock: _capture_state['count'] += 1
     except Exception: pass
 def _capture_worker(stop: threading.Event, wake: threading.Event) -> None:
+    stop.wait(3.5)
     last_hash: list = [None]; last_change: list = [None]; nxt = time.time()
     while not stop.is_set():
         if stop.wait(timeout=min(max(0., nxt - time.time()), 0.2)): break

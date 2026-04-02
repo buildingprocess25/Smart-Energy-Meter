@@ -1,5 +1,7 @@
 firebase.initializeApp(firebaseConfig);
 const database = firebase.database();
+function showGlobalLoader() { const g = document.getElementById('globalLoader'); if(g){ g.style.display = 'flex'; void g.offsetWidth; g.classList.remove('hidden'); } }
+function hideGlobalLoader() { const g = document.getElementById('globalLoader'); if(g){ g.classList.add('hidden'); setTimeout(()=>g.classList.contains('hidden')&&(g.style.display='none'), 500); } }
 let realtimeData = null;
 let rawRealtimeData = null;
 let isConnected = false;
@@ -22,6 +24,8 @@ let _dayListenerAttached = null;
 let realtimeChart = null;
 let selectedParameter = 'voltage';
 let timeFilter = 'all';
+let chartTargetDate = null;
+let _hourlyListenerDate = null;
 let _userIsZoomed = false;
 let _visiblePoints = 300;
 const MAX_DATA_POINTS = 600;
@@ -86,8 +90,11 @@ function _rebuildChart(animate = false) {
         _rebuildTimer = null;
     }
     _chartEntryAnimate = animate;
-    if (realtimeChart) { realtimeChart.destroy(); realtimeChart = null; }
-    initChart();
+    if (!realtimeChart) {
+        initChart();
+    } else {
+        _morphChartStructure(animate);
+    }
     _startAggRebuild();
 }
 let _lastChartMinute = -1;
@@ -96,11 +103,11 @@ let _lastChartDay = -1;
 let _timeWindowCheckId = null;
 let _aggRebuildId = null;
 const PHASE_COLORS = [
-    { line: '#1677FF', bar: 'rgba(22,119,255,0.75)', light: 'rgba(22,119,255,0.18)' },
-    { line: '#FF6B35', bar: 'rgba(255,107,53,0.75)', light: 'rgba(255,107,53,0.18)' },
-    { line: '#52C41A', bar: 'rgba(82,196,26,0.75)', light: 'rgba(82,196,26,0.18)' },
-    { line: '#7B61FF', bar: 'rgba(123,97,255,0.75)', light: 'rgba(123,97,255,0.18)' },
-    { line: '#FF4D4F', bar: 'rgba(255,77,79,0.75)', light: 'rgba(255,77,79,0.18)' },
+    { line: '#006400', bar: 'rgba(0,100,0,0.85)',   light: 'rgba(0,100,0,0.15)' },    // L1: Dark Green
+    { line: '#b38600', bar: 'rgba(179,134,0,0.85)', light: 'rgba(179,134,0,0.15)' },  // L2: Dark Gold
+    { line: '#004073', bar: 'rgba(0,64,115,0.85)',  light: 'rgba(0,64,115,0.15)' },   // L3: Deep Blue
+    { line: '#333333', bar: 'rgba(51,51,51,0.85)',   light: 'rgba(51,51,51,0.15)' },     // L4
+    { line: '#4a2311', bar: 'rgba(74,35,17,0.85)',   light: 'rgba(74,35,17,0.15)' },     // L5
 ];
 function getPhaseColors(phase) {
     const idx = parseInt(phase.slice(1)) - 1;
@@ -363,9 +370,9 @@ function updatePhaseSelector(phases) {
     }).join('');
 }
 const _p2 = v => String(v).padStart(2, '0');
-function _minKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}T${_p2(d.getHours())}:${_p2(d.getMinutes())}`; }
-function _hourKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}T${_p2(d.getHours())}`; }
-function _dayKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}`; }
+function _minKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth() + 1)}-${_p2(d.getDate())}T${_p2(d.getHours())}:${_p2(d.getMinutes())}`; }
+function _hourKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth() + 1)}-${_p2(d.getDate())}T${_p2(d.getHours())}`; }
+function _dayKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth() + 1)}-${_p2(d.getDate())}`; }
 let phaseMinAgg = {};
 let phaseHourAgg = {};
 let phaseDayAgg = {};
@@ -504,10 +511,15 @@ function rebuildCascadeFromRaw() {
     _prevDayKey = _dayKey(now);
 }
 function getHourlyFirebaseData(phase, param) {
-    const now = new Date();
-    const todayStr = `${now.getFullYear()}-${_p2(now.getMonth()+1)}-${_p2(now.getDate())}`;
-    const currentHour = now.getHours();
-    const currentMin = Math.floor(now.getMinutes() / 5) * 5;
+    const targetDateObj = chartTargetDate ? new Date(chartTargetDate + 'T00:00:00') : new Date();
+    const todayDate = new Date();
+    todayDate.setHours(0,0,0,0);
+    const isToday = targetDateObj.getTime() === todayDate.getTime();
+    
+    const targetStr = `${targetDateObj.getFullYear()}-${_p2(targetDateObj.getMonth() + 1)}-${_p2(targetDateObj.getDate())}`;
+    const endHour = isToday ? new Date().getHours() : 23;
+    const endMin = isToday ? (Math.floor(new Date().getMinutes() / 5) * 5) : 55;
+    
     const fieldMap = {
         voltage: 'Voltage',
         current: 'Current',
@@ -518,15 +530,15 @@ function getHourlyFirebaseData(phase, param) {
     };
     const field = fieldMap[param] || 'Voltage';
     const labels = [], values = [];
-    for (let h = 0; h <= currentHour; h++) {
-        const maxMin = (h === currentHour) ? currentMin : 55;
+    
+    for (let h = 0; h <= endHour; h++) {
+        const maxMin = (h === endHour) ? endMin : 55;
         for (let m = 0; m <= maxMin; m += 5) {
             const key = `${_p2(h)}${_p2(m)}`;
             const rec = hourlyFirebaseData[phase]?.[key];
             labels.push(`${_p2(h)}:${_p2(m)}`);
-            if (rec && rec.date === todayStr) {
-                const v = rec[field];
-                values.push(v != null ? parseFloat(parseFloat(v).toFixed(4)) : 0);
+            if (rec && rec.date === targetStr && rec[field] != null) {
+                values.push(parseFloat(parseFloat(rec[field]).toFixed(4)));
             } else {
                 values.push(0);
             }
@@ -535,18 +547,22 @@ function getHourlyFirebaseData(phase, param) {
     return { labels, values };
 }
 function _attachHourlyListener(deviceId) {
-    if (_hourlyListenerAttached === deviceId) {
+    if (_hourlyListenerAttached === deviceId && _hourlyListenerDate === chartTargetDate) {
         if (timeFilter === 'day' && realtimeChart) {
             _refreshDayChartFromFirebase();
         }
         return;
     }
     if (_hourlyListenerAttached) {
-        database.ref(`devices/${_hourlyListenerAttached}/HourlyCapture`).off();
+        const oldTarget = _hourlyListenerDate || new Date().toISOString().split('T')[0];
+        database.ref(`devices/${_hourlyListenerAttached}/HourlyCapture/${oldTarget}`).off();
     }
     _hourlyListenerAttached = deviceId;
+    _hourlyListenerDate = chartTargetDate;
     hourlyFirebaseData = {};
-    database.ref(`devices/${deviceId}/HourlyCapture`).on('value', snap => {
+    const targetDate = chartTargetDate || new Date().toISOString().split('T')[0];
+    
+    database.ref(`devices/${deviceId}/HourlyCapture/${targetDate}`).on('value', snap => {
         hourlyFirebaseData = {};
         if (snap.exists()) {
             snap.forEach(phaseSnap => {
@@ -622,15 +638,25 @@ function getDayViewData(phase, param) {
     };
     const field = fieldMap[param] || 'Voltage';
     const phaseRec = dayFirebaseData[phase] || {};
-    const sortedKeys = Object.keys(phaseRec).sort();
+    
+    const targetDateObj = chartTargetDate ? new Date(chartTargetDate + 'T00:00:00') : new Date();
+    const daysArr = [];
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(targetDateObj);
+        d.setDate(d.getDate() - i);
+        daysArr.push(`${d.getFullYear()}-${_p2(d.getMonth() + 1)}-${_p2(d.getDate())}`);
+    }
+    
     const labels = [], values = [];
-    sortedKeys.forEach(dateKey => {
+    daysArr.forEach(dateKey => {
+        const [, m, dStr] = dateKey.split('-');
+        labels.push(`${dStr}/${m}`);
         const rec = phaseRec[dateKey];
-        if (!rec) return;
-        const [, m, d] = dateKey.split('-');
-        labels.push(`${d}/${m}`);
-        const v = rec[field];
-        values.push(v != null ? parseFloat(parseFloat(v).toFixed(4)) : 0);
+        if (rec && rec[field] != null) {
+            values.push(parseFloat(parseFloat(rec[field]).toFixed(4)));
+        } else {
+            values.push(0);
+        }
     });
     return { labels, values };
 }
@@ -701,10 +727,101 @@ const PARAM_INFO = {
     energy: { label: 'Energy', unit: 'kWh', color: '#00A651', border: '#008040' },
     powerFactor: { label: 'Power Factor', unit: '', color: '#6B46C1', border: '#5A3AA0' },
 };
+function updateDateNavigatorUI() {
+    const nav = document.getElementById('chartDateNav');
+    const label = document.getElementById('isolarDateLabel');
+    const hiddenDate = document.getElementById('chartHiddenDate');
+    if (!nav || !label || !hiddenDate) return;
+
+    if (timeFilter === 'all') {
+        nav.style.display = 'none';
+        return;
+    }
+    nav.style.display = 'flex';
+
+    if (!chartTargetDate) {
+        chartTargetDate = new Date().toLocaleDateString('en-CA');
+    }
+
+    const todayDate = new Date();
+    const minDate = new Date();
+    minDate.setDate(todayDate.getDate() - 30);
+    hiddenDate.min = minDate.toLocaleDateString('en-CA');
+    hiddenDate.max = todayDate.toLocaleDateString('en-CA');
+    hiddenDate.value = chartTargetDate;
+
+    const targetDateObj = new Date(chartTargetDate + 'T00:00:00');
+    
+    if (timeFilter === 'day') {
+        const d = String(targetDateObj.getDate()).padStart(2, '0');
+        const m = String(targetDateObj.getMonth() + 1).padStart(2, '0');
+        const y = targetDateObj.getFullYear();
+        label.innerText = `${d}/${m}/${y}`;
+    } else if (timeFilter === 'week') {
+        const startDateObj = new Date(targetDateObj);
+        startDateObj.setDate(startDateObj.getDate() - 6);
+        const sd = String(startDateObj.getDate()).padStart(2, '0');
+        const sm = String(startDateObj.getMonth() + 1).padStart(2, '0');
+        const sy = startDateObj.getFullYear();
+        const ed = String(targetDateObj.getDate()).padStart(2, '0');
+        const em = String(targetDateObj.getMonth() + 1).padStart(2, '0');
+        const ey = targetDateObj.getFullYear();
+        label.innerText = `${sd}/${sm}/${sy} - ${ed}/${em}/${ey}`;
+    }
+}
+
+function openNativeDatePicker() {
+    const hiddenDate = document.getElementById('chartHiddenDate');
+    if (hiddenDate && hiddenDate.showPicker) {
+        hiddenDate.showPicker();
+    }
+}
+
+function onHiddenDateChange() {
+    const hiddenDate = document.getElementById('chartHiddenDate');
+    if (!hiddenDate || !hiddenDate.value) return;
+    chartTargetDate = hiddenDate.value;
+    updateDateNavigatorUI();
+    
+    if (timeFilter === 'day' && selectedDeviceId) _attachHourlyListener(selectedDeviceId);
+    if (timeFilter === 'week' && selectedDeviceId && realtimeChart) _refreshWeekChartFromFirebase();
+}
+
+function shiftChartDate(daysDirection) {
+    if (!chartTargetDate) return;
+    const targetDateObj = new Date(chartTargetDate + 'T00:00:00');
+    
+    let shiftAmount = daysDirection;
+    if (timeFilter === 'week') {
+        shiftAmount = daysDirection * 7;
+    }
+    
+    targetDateObj.setDate(targetDateObj.getDate() + shiftAmount);
+    
+    const todayDate = new Date();
+    todayDate.setHours(0,0,0,0);
+    if (targetDateObj > todayDate) return;
+    
+    const minDate = new Date();
+    minDate.setDate(todayDate.getDate() - 30);
+    minDate.setHours(0,0,0,0);
+    if (targetDateObj < minDate) return;
+    
+    chartTargetDate = targetDateObj.toLocaleDateString('en-CA');
+    updateDateNavigatorUI();
+    
+    if (timeFilter === 'day' && selectedDeviceId) _attachHourlyListener(selectedDeviceId);
+    if (timeFilter === 'week' && selectedDeviceId && realtimeChart) _refreshWeekChartFromFirebase();
+}
+
 function setTimeFilter(filter) {
+    if (timeFilter === filter) return;
     timeFilter = filter;
+    
+    updateDateNavigatorUI();
+    
     _userIsZoomed = false;
-    _visiblePoints = 300;
+    _visiblePoints = filter === 'day' ? 24 : (filter === 'week' ? 7 : 300);
     document.querySelectorAll('.time-filter-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === filter);
     });
@@ -712,9 +829,9 @@ function setTimeFilter(filter) {
     _lastChartMinute = now.getMinutes();
     _lastChartHour = now.getHours();
     _lastChartDay = now.getDate();
-    if (realtimeChart) { realtimeChart.destroy(); realtimeChart = null; }
     if (filter === 'day' && selectedDeviceId) _attachHourlyListener(selectedDeviceId);
     if (filter === 'week' && selectedDeviceId) _attachDayListener(selectedDeviceId);
+    
     _rebuildChart(true);
 }
 function _startAggRebuild() {
@@ -744,8 +861,8 @@ function _checkTimeWindowChange() {
             _rebuildChart();
         }
         else if (_lastChartMinute !== -1 &&
-                 Math.floor(m / 5) !== Math.floor(_lastChartMinute / 5) &&
-                 realtimeChart) {
+            Math.floor(m / 5) !== Math.floor(_lastChartMinute / 5) &&
+            realtimeChart) {
             _refreshDayChartFromFirebase();
         }
     } else if (timeFilter === 'week') {
@@ -771,16 +888,54 @@ function getAllPhaseDatasets() {
     const isBar = timeFilter === 'week';
     const allPhases = enabledKeys.slice().sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
     if (!allPhases.length) return { labels: [], datasets: [] };
-    let labels = [];
-    for (const ph of allPhases) {
-        const ag = getAggregatedDataForPhase(ph, selectedParameter);
-        if (ag.labels && ag.labels.length > labels.length) labels = ag.labels;
+
+    let labels;
+    let getValues;
+
+    if (isBar) {
+        // WEEK mode: build a CANONICAL 7-day date array so all phases share the same X-axis
+        const targetDateObj = chartTargetDate ? new Date(chartTargetDate + 'T00:00:00') : new Date();
+        const canonicalDates = [];
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date(targetDateObj);
+            d.setDate(d.getDate() - i);
+            canonicalDates.push(`${d.getFullYear()}-${_p2(d.getMonth() + 1)}-${_p2(d.getDate())}`);
+        }
+        labels = canonicalDates.map(dk => { const [, m, day] = dk.split('-'); return `${day}/${m}`; });
+
+        const fieldMap = {
+            voltage: 'Voltage', current: 'Current', power: 'Power',
+            frequency: 'Frequency', energy: 'Energy', powerFactor: 'PowerFactor',
+        };
+        const field = fieldMap[selectedParameter] || 'Voltage';
+
+        // Per-phase value lookup against the canonical date grid
+        getValues = (phase) => {
+            const phaseRec = dayFirebaseData[phase] || {};
+            return canonicalDates.map(dk => {
+                const rec = phaseRec[dk];
+                return (rec && rec[field] != null) ? parseFloat(parseFloat(rec[field]).toFixed(4)) : 0;
+            });
+        };
+    } else {
+        // DAY / ALL mode: keep existing behaviour
+        let maxLabels = [];
+        for (const ph of allPhases) {
+            const ag = getAggregatedDataForPhase(ph, selectedParameter);
+            if (ag.labels && ag.labels.length > maxLabels.length) maxLabels = ag.labels;
+        }
+        labels = maxLabels;
+        getValues = (phase) => {
+            let { values } = getAggregatedDataForPhase(phase, selectedParameter);
+            if (!values || values.length === 0) return Array(labels.length).fill(0);
+            if (values.length < labels.length) return [...Array(labels.length - values.length).fill(0), ...values];
+            return values;
+        };
     }
+
     const datasets = allPhases.map(phase => {
         const colors = getPhaseColors(phase);
-        let { values } = getAggregatedDataForPhase(phase, selectedParameter);
-        if (!values || values.length === 0) values = Array(labels.length).fill(0);
-        else if (values.length < labels.length) values = [...Array(labels.length - values.length).fill(0), ...values];
+        const values = getValues(phase);
         const bgFn = isBar
             ? colors.bar
             : (context) => {
@@ -806,10 +961,7 @@ function getAllPhaseDatasets() {
             pointBorderWidth: isDayLine ? 2 : 0,
             borderRadius: isBar ? [6, 6, 0, 0] : 0,
             borderSkipped: false,
-            ...(isBar ? {
-                barPercentage: 0.55,
-                categoryPercentage: 0.7,
-            } : {}),
+            ...(isBar ? { barPercentage: 0.55, categoryPercentage: 0.7 } : {}),
         };
     });
     return { labels, datasets };
@@ -882,18 +1034,20 @@ function initChart() {
             responsive: true,
             maintainAspectRatio: false,
             interaction: { intersect: false, mode: 'index' },
-            animation: isBar && _chartEntryAnimate ? {
-                duration: 650,
-                easing: 'easeOutQuart',
+            animation: _chartEntryAnimate ? {
+                duration: 800,
+                easing: 'easeOutQuint',
                 onComplete({ chart }) {
-                    chart.options.animation = false;
-                    chart.options.animations = {};
+                    if (timeFilter === 'all') {
+                        chart.options.animation = false;
+                        chart.options.animations = {};
+                    }
                 },
             } : false,
-            animations: isBar && _chartEntryAnimate ? {
+            animations: _chartEntryAnimate ? {
                 y: {
-                    duration: 650,
-                    easing: 'easeOutQuart',
+                    duration: 800,
+                    easing: 'easeOutQuint',
                     from(ctx) {
                         return ctx.chart.scales?.y?.getPixelForValue(0) ?? 0;
                     },
@@ -938,7 +1092,7 @@ function initChart() {
                             if (timeFilter === 'all') {
                                 const { min, max } = chart.scales.x;
                                 _visiblePoints = Math.max(10, Math.min(MAX_DATA_POINTS, Math.round(max - min + 1)));
-                                try { chart.resetZoom('none'); } catch (_) {}
+                                try { chart.resetZoom('none'); } catch (_) { }
                             } else {
                                 _userIsZoomed = true;
                             }
@@ -951,7 +1105,7 @@ function initChart() {
                             if (timeFilter === 'all') {
                                 const { min, max } = chart.scales.x;
                                 _visiblePoints = Math.max(10, Math.min(MAX_DATA_POINTS, Math.round(max - min + 1)));
-                                try { chart.resetZoom('none'); } catch (_) {}
+                                try { chart.resetZoom('none'); } catch (_) { }
                             } else {
                                 _userIsZoomed = true;
                             }
@@ -1128,18 +1282,73 @@ function _appendChartPoint(point) {
         });
     }
 }
-function updateChart(raw) {}
+function updateChart(raw) { }
 function changeParameter() { _switchParameter(DOM.paramSelect?.value); }
 function _switchParameter(param) {
     if (!param) return;
     selectedParameter = param;
     _userIsZoomed = false;
-    _visiblePoints = 150;
+    _visiblePoints = timeFilter === 'day' ? 24 : (timeFilter === 'week' ? 7 : 150);
     if (DOM.paramSelect) DOM.paramSelect.value = param;
     document.querySelectorAll('.metric-card-compact').forEach(card => {
         card.classList.toggle('card-active', card.dataset.param === param);
     });
     _rebuildChart(true);
+}
+function _morphChartStructure(animate = true) {
+    if (!realtimeChart) { initChart(); return; }
+    const isBar = timeFilter === 'week';
+    realtimeChart.config.type = isBar ? 'bar' : 'line';
+    if (timeFilter === 'all') {
+        const total = chartLabels.length;
+        const visible = Math.min(_visiblePoints, total);
+        const start = Math.max(0, total - visible);
+        const enabledKeys = _getEnabledPhaseKeys();
+        const phases = enabledKeys.slice().sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+        realtimeChart.data.labels = chartLabels.slice(start);
+        realtimeChart.data.datasets = phases.map(phase => {
+            const colors = getPhaseColors(phase);
+            let values = phaseChartData[phase]?.[selectedParameter] || [];
+            if (!values.length) values = Array(total).fill(0);
+            else if (values.length < total) values = [...Array(total - values.length).fill(0), ...values];
+            values = values.slice(start);
+            return {
+                label: getPhaseLabel(phase),
+                data: values,
+                borderColor: colors.line,
+                backgroundColor: (context) => {
+                    const ch = context.chart;
+                    if (!ch.chartArea) return colors.light;
+                    return createAreaGradient(ch.ctx, ch.chartArea, colors.light);
+                },
+                borderWidth: 2.5,
+                tension: 0.38,
+                cubicInterpolationMode: 'monotone',
+                spanGaps: true,
+                fill: true,
+                pointRadius: 0,
+                pointHoverRadius: 0,
+            };
+        });
+    } else {
+        const built = getAllPhaseDatasets();
+        realtimeChart.data.labels = built.labels;
+        realtimeChart.data.datasets = built.datasets;
+    }
+    const { yMin, yMax } = getYBoundsMulti(realtimeChart.data.datasets, selectedParameter);
+    realtimeChart.options.scales.y.min = yMin;
+    realtimeChart.options.scales.y.max = yMax;
+    if (animate) {
+        realtimeChart.options.animation = { duration: 750, easing: 'easeOutQuart' };
+    } else {
+        realtimeChart.options.animation = false;
+    }
+    realtimeChart.update();
+    if (animate && timeFilter === 'all') {
+        setTimeout(() => {
+            if (realtimeChart) realtimeChart.options.animation = false;
+        }, 800);
+    }
 }
 function switchTab(tabName) {
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -1161,7 +1370,7 @@ async function loadDevices() {
             }
         });
         _deviceListCache = devices;
-        const visible = devices.filter(d => d.id !== 'alat1');
+        const visible = devices;
         if (!visible.length) return;
         if (!selectedDeviceId) {
             selectedDeviceId = visible[0].id;
@@ -1175,13 +1384,17 @@ async function loadDevices() {
             if (activeDev) selectedDeviceName = activeDev.name || activeDev.id;
         }
         _populateDeviceSelect(visible);
-        renderDeviceList(visible);
         const activeDev = visible.find(d => d.id === selectedDeviceId);
-        if (activeDev?.phases?.length) {
-            const enabledPhases = activeDev.phases.filter(p => p.enabled !== false).map(p => p.phase);
-            updatePhaseSelector(enabledPhases);
+        if (activeDev) {
+            renderDeviceList([activeDev]);
+            if (activeDev.phases?.length) {
+                const enabledPhases = activeDev.phases.filter(p => p.enabled !== false).map(p => p.phase);
+                updatePhaseSelector(enabledPhases);
+            }
+        } else {
+            renderDeviceList([]);
         }
-    } catch (e) {}
+    } catch (e) { }
 }
 function _populateDeviceSelect(devices) {
     const sel = DOM.deviceSelect;
@@ -1355,13 +1568,15 @@ async function onDeviceChange(deviceId) {
     historyData = []; recordsBySession = {}; sessionsData = {};
     buildSessionUI();
     fetch(`/api/devices/${deviceId}/init-sensors`, { method: 'POST' })
-        .then(r => r.json()).then(json => { if (json.phases) loadDevices(); }).catch(() => {});
+        .then(r => r.json()).then(json => { if (json.phases) loadDevices(); }).catch(() => { });
     _attachRealtimeListener(deviceId);
     _attachHistoryListener(deviceId);
     _attachDeviceNameListener(deviceId);
     _attachPhasesListener(deviceId);
     _attachHourlyListener(deviceId);
     _attachDayListener(deviceId);
+    const activeDev = _deviceListCache.find(d => d.id === deviceId);
+    if (activeDev) renderDeviceList([activeDev]);
 }
 function startRenamePhase(deviceId, phase) {
     const id = `${deviceId}_${phase}`;
@@ -1480,7 +1695,7 @@ function _attachRealtimeListener(deviceId) {
             _lastPhaseCount = currentPhaseCount;
             updatePhaseSelector(data._phases || []);
             fetch(`/api/devices/${deviceId}/init-sensors`, { method: 'POST' })
-                .then(r => r.json()).then(() => loadDevices()).catch(() => {});
+                .then(r => r.json()).then(() => loadDevices()).catch(() => { });
         }
         lastDataTimestamp = Date.now();
         rawRealtimeData = raw;
@@ -1497,6 +1712,7 @@ function _attachRealtimeListener(deviceId) {
 function updateConnectionStatus(connected) {
     const dot = DOM.statusDot, txt = DOM.statusText;
     if (!dot || !txt) return;
+    dot.classList.remove('connecting');
     dot.classList.toggle('online', connected);
     dot.classList.toggle('offline', !connected);
     txt.textContent = connected ? 'ONLINE' : 'OFFLINE';
@@ -1643,8 +1859,8 @@ function buildSessionUI() {
         const phaseSourceKeys = recordedPhaseKeys.length > 0
             ? recordedPhaseKeys
             : Object.keys(frozenNames)
-                  .filter(k => /^L\d+$/.test(k))
-                  .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+                .filter(k => /^L\d+$/.test(k))
+                .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
         const dev2 = _deviceListCache.find(d => d.id === selectedDeviceId);
         const phases = phaseSourceKeys.map(ph => {
             const cachedName = dev2?.phases?.find(p => p.phase === ph)?.name;
@@ -1697,24 +1913,24 @@ function buildSessionUI() {
                 </div>
                 <div id="phase-detail_${session.id}_${p.phase}" style="display:none">
                     ${(() => {
-                        const pr = (recordsBySession[session.id]?.[p.phase] || []).slice().sort((a, b) => parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp));
-                        return `<table class="data-table inner-table" style="width:100%;margin:0;border-radius:0">
+                const pr = (recordsBySession[session.id]?.[p.phase] || []).slice().sort((a, b) => parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp));
+                return `<table class="data-table inner-table" style="width:100%;margin:0;border-radius:0">
                         <thead><tr><th>Timestamp</th><th>Voltage (V)</th><th>Current (A)</th><th>Power (W)</th><th>Frequency (Hz)</th><th>Energy (kWh)</th><th>PF</th></tr></thead>
                         <tbody>${pr.length ? pr.map(e => {
-                            const pfColor = e.offline ? '#9CA3AF' : (e.PowerFactor >= 0.85 ? '#00A651' : '#ED1C24');
-                            const offTag = e.offline ? ' <span style="color:#9CA3AF;font-size:9px;font-weight:700">[offline]</span>' : '';
-                            return '<tr class="inner-record-row"' + (e.offline ? ' style="opacity:0.5;font-style:italic"' : '') + '>'
-                                + '<td>' + e.timestamp + offTag + '</td>'
-                                + '<td>' + (e.Voltage    != null ? e.Voltage.toFixed(2)    : '---') + '</td>'
-                                + '<td>' + (e.Current    != null ? e.Current.toFixed(2)    : '---') + '</td>'
-                                + '<td>' + (e.Power      != null ? e.Power.toFixed(2)      : '---') + '</td>'
-                                + '<td>' + (e.Frequency  != null ? e.Frequency.toFixed(2)  : '---') + '</td>'
-                                + '<td>' + (e.Energy     != null ? e.Energy.toFixed(3)     : '---') + '</td>'
-                                + '<td style="color:' + pfColor + '">' + (e.PowerFactor != null ? e.PowerFactor.toFixed(3) : '---') + '</td>'
-                                + '</tr>';
-                        }).join('') : '<tr><td colspan="7" class="loading-cell" style="padding:20px !important">Belum ada record</td></tr>'}</tbody>
+                    const pfColor = e.offline ? '#9CA3AF' : (e.PowerFactor >= 0.85 ? '#00A651' : '#ED1C24');
+                    const offTag = e.offline ? ' <span style="color:#9CA3AF;font-size:9px;font-weight:700">[offline]</span>' : '';
+                    return '<tr class="inner-record-row"' + (e.offline ? ' style="opacity:0.5;font-style:italic"' : '') + '>'
+                        + '<td>' + e.timestamp + offTag + '</td>'
+                        + '<td>' + (e.Voltage != null ? e.Voltage.toFixed(2) : '---') + '</td>'
+                        + '<td>' + (e.Current != null ? e.Current.toFixed(2) : '---') + '</td>'
+                        + '<td>' + (e.Power != null ? e.Power.toFixed(2) : '---') + '</td>'
+                        + '<td>' + (e.Frequency != null ? e.Frequency.toFixed(2) : '---') + '</td>'
+                        + '<td>' + (e.Energy != null ? e.Energy.toFixed(3) : '---') + '</td>'
+                        + '<td style="color:' + pfColor + '">' + (e.PowerFactor != null ? e.PowerFactor.toFixed(3) : '---') + '</td>'
+                        + '</tr>';
+                }).join('') : '<tr><td colspan="7" class="loading-cell" style="padding:20px !important">Belum ada record</td></tr>'}</tbody>
                         </table>`;
-                    })()}
+            })()}
                 </div>
             </div>`).join('');
         return `
@@ -1747,20 +1963,20 @@ function buildSessionUI() {
     }).join('');
     openSessions.forEach(sid => {
         const detail = $(`detail_${sid}`), chevron = $(`chevron_${sid}`);
-        if (detail)  detail.style.display  = 'table-row';
-        if (chevron) chevron.textContent    = '\u25BC';
+        if (detail) detail.style.display = 'table-row';
+        if (chevron) chevron.textContent = '\u25BC';
     });
     openPhases.forEach(key => {
         const detail = $(`phase-detail_${key}`), chevron = $(`chevron_${key}`);
-        if (detail)  detail.style.display = 'block';
-        if (chevron) chevron.textContent   = '\u25BC';
+        if (detail) detail.style.display = 'block';
+        if (chevron) chevron.textContent = '\u25BC';
     });
     editingPhases.forEach((inputValue, key) => {
         const viewEl = document.getElementById('sph-view_' + key);
         const editEl = document.getElementById('sph-edit_' + key);
         const inputEl = document.getElementById('sph-input_' + key);
         if (!editEl) return;
-        if (viewEl)  viewEl.style.display = 'none';
+        if (viewEl) viewEl.style.display = 'none';
         editEl.style.display = 'flex';
         if (inputEl) {
             inputEl.value = inputValue;
@@ -1818,8 +2034,8 @@ function cancelRenameSessionPhase(sessionId, phase) {
     const inputEl = $(`sph-input_${sessionId}_${phase}`);
     const labelEl = $(`sph-label_${sessionId}_${phase}`);
     if (inputEl && labelEl) inputEl.value = labelEl.textContent;
-    if (editEl)  editEl.style.display  = 'none';
-    if (viewEl)  viewEl.style.display  = 'flex';
+    if (editEl) editEl.style.display = 'none';
+    if (viewEl) viewEl.style.display = 'flex';
 }
 async function saveRenameSessionPhase(sessionId, phase) {
     const inputEl = $(`sph-input_${sessionId}_${phase}`);
@@ -1877,41 +2093,41 @@ const COL_WIDTHS = [
 ];
 function _buildExcelRow(entry, deviceName) {
     const row = {};
-    row['Device Name']             = deviceName;
-    row['Timestamp']               = entry.timestamp ?? '';
-    row['Status']                  = entry.offline ? 'OFFLINE' : 'online';
-    row['Voltage (V)']             = entry.Voltage     != null ? +entry.Voltage.toFixed(2)          : '';
-    row['Current (A)']             = entry.Current     != null ? +entry.Current.toFixed(2)          : '';
-    row['Power (W)']               = entry.Power       != null ? +entry.Power.toFixed(2)            : '';
-    row['Apparent Power (kVA)']    = entry.Apparent    != null ? +entry.Apparent.toFixed(4)         : '';
-    row['Reactive Power (kVAR)']   = entry.Reactive    != null ? +entry.Reactive.toFixed(4)         : '';
-    row['Power Factor']            = entry.PowerFactor != null ? +entry.PowerFactor.toFixed(4)      : '';
-    row['Phase Angle (°)']         = entry.Phase1      != null ? +entry.Phase1.toFixed(3)           : '';
-    row['Frequency (Hz)']          = entry.Frequency   != null ? +entry.Frequency.toFixed(1)        : '';
-    row['Active Energy (kWh)']     = entry.Energy      != null ? +entry.Energy.toFixed(4)           : '';
-    row['Apparent Energy (kVAh)']  = entry.EnergyApparent != null ? +entry.EnergyApparent.toFixed(4): '';
-    row['Reactive Energy (kVARh)'] = entry.EnergyReactive != null ? +entry.EnergyReactive.toFixed(4): '';
+    row['Device Name'] = deviceName;
+    row['Timestamp'] = entry.timestamp ?? '';
+    row['Status'] = entry.offline ? 'OFFLINE' : 'online';
+    row['Voltage (V)'] = entry.Voltage != null ? +entry.Voltage.toFixed(2) : '';
+    row['Current (A)'] = entry.Current != null ? +entry.Current.toFixed(2) : '';
+    row['Power (W)'] = entry.Power != null ? +entry.Power.toFixed(2) : '';
+    row['Apparent Power (kVA)'] = entry.Apparent != null ? +entry.Apparent.toFixed(4) : '';
+    row['Reactive Power (kVAR)'] = entry.Reactive != null ? +entry.Reactive.toFixed(4) : '';
+    row['Power Factor'] = entry.PowerFactor != null ? +entry.PowerFactor.toFixed(4) : '';
+    row['Phase Angle (°)'] = entry.Phase1 != null ? +entry.Phase1.toFixed(3) : '';
+    row['Frequency (Hz)'] = entry.Frequency != null ? +entry.Frequency.toFixed(1) : '';
+    row['Active Energy (kWh)'] = entry.Energy != null ? +entry.Energy.toFixed(4) : '';
+    row['Apparent Energy (kVAh)'] = entry.EnergyApparent != null ? +entry.EnergyApparent.toFixed(4) : '';
+    row['Reactive Energy (kVARh)'] = entry.EnergyReactive != null ? +entry.EnergyReactive.toFixed(4) : '';
     return row;
 }
 async function exportSession(sessionId, sessionName, event) {
     event.stopPropagation();
-    const phaseData    = recordsBySession[sessionId] || {};
-    const phaseKeys    = Object.keys(phaseData).filter(k => /^L\d+$/.test(k)).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+    const phaseData = recordsBySession[sessionId] || {};
+    const phaseKeys = Object.keys(phaseData).filter(k => /^L\d+$/.test(k)).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
     const totalRecords = phaseKeys.reduce((s, ph) => s + (phaseData[ph]?.length || 0), 0);
     if (!phaseKeys.length || totalRecords === 0) { await showModal('Tidak Ada Data', `Sesi "${sessionName}" belum memiliki record.`, 'warning'); return; }
     const confirmed = await showModal('Export Sesi',
         `Ekspor ${totalRecords} record (${phaseKeys.length} phase) dari sesi:\n"${sessionName}"\n\nData Firebase TIDAK dihapus. Lanjutkan?`, 'info', ['confirm']);
     if (!confirmed) return;
     try {
-        const session    = sessionsData[sessionId];
+        const session = sessionsData[sessionId];
         const deviceName = session?.deviceName || _deviceListCache.find(d => d.id === (session?.deviceId || selectedDeviceId))?.name || selectedDeviceId;
-        const wb         = XLSX.utils.book_new();
-        const frozenNames  = session.phaseNames || {};
+        const wb = XLSX.utils.book_new();
+        const frozenNames = session.phaseNames || {};
         for (const phase of phaseKeys) {
-            const phaseRecs    = (phaseData[phase] || []).slice().sort((a, b) => parseTimestamp(a.timestamp) - parseTimestamp(b.timestamp));
+            const phaseRecs = (phaseData[phase] || []).slice().sort((a, b) => parseTimestamp(a.timestamp) - parseTimestamp(b.timestamp));
             const phaseDevName = frozenNames[phase] || phase;
-            const ws           = XLSX.utils.json_to_sheet(phaseRecs.map(e => _buildExcelRow(e, deviceName)));
-            ws['!cols']        = COL_WIDTHS;
+            const ws = XLSX.utils.json_to_sheet(phaseRecs.map(e => _buildExcelRow(e, deviceName)));
+            ws['!cols'] = COL_WIDTHS;
             XLSX.utils.book_append_sheet(wb, ws, phaseDevName);
         }
         const allRecords = Object.values(phaseData).flat();
@@ -1982,7 +2198,7 @@ async function syncCaptureStatus() {
                 DOM.intervalDisplay.textContent = `Current: ${serverSec} seconds`;
         }
         buildSessionUI();
-    } catch (e) {}
+    } catch (e) { }
 }
 function _startStatusPolling() {
     if (_captureStatusPollId) return;
@@ -2160,7 +2376,7 @@ async function setCaptureInterval() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ interval: totalSec }),
         });
-    } catch (e) {}
+    } catch (e) { }
     await showModal('Interval Diperbarui', `Interval diubah menjadi ${val} ${unitLabel}.`, 'success');
 }
 document.addEventListener('DOMContentLoaded', async () => {
@@ -2171,6 +2387,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         card.classList.toggle('card-active', card.dataset.param === selectedParameter);
     });
     await loadDevices();
+    const globalLoader = document.getElementById('globalLoader');
+    if (globalLoader) {
+        globalLoader.classList.add('hidden');
+        setTimeout(() => globalLoader.style.display = 'none', 500);
+    }
     setInterval(loadDevices, 30_000);
     updateConnectionStatus(false);
     startConnectionMonitoring();
