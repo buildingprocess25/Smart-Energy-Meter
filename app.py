@@ -240,6 +240,8 @@ def _stop_and_respond() -> None:
     threading.Thread(target=_finalize_bg, args=(sid, did, cnt, se, th, ep), daemon=True).start()
 @app.route('/')
 def index(): return render_template('index.html', firebase_config=FIREBASE_CONFIG)
+@app.route('/health', methods=['GET'])
+def health(): return jsonify({"status": "ok", "message": "Service is alive"}), 200
 @app.route('/api/config')
 def get_config(): return jsonify(FIREBASE_CONFIG)
 @app.route('/api/devices')
