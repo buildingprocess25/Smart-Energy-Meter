@@ -410,6 +410,35 @@
             </div>
         </div>
     </div>
+    <div id="changeTimeModal" class="modal-overlay">
+        <div class="modal-container">
+            <button class="modal-close" onclick="closeChangeTimeModal()">&times;</button>
+            <div class="modal-content">
+                <div class="modal-icon info">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polyline points="12 6 12 12 16 14"></polyline>
+                    </svg>
+                </div>
+                <h3 class="modal-title">Ubah Waktu Sesi</h3>
+                <p class="modal-message" style="margin-bottom:14px;font-size:13px;color:var(--text-secondary)">Format: <kbd>HH:MM:SS DD/MM/YYYY</kbd><br>Ganti waktu mulai. Waktu record lain akan tersinkron otomatis berdasarkan selisih waktu.</p>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span style="font-size:12px;color:var(--text-tertiary);width:45px;">Dari:</span>
+                        <input type="text" id="oldTimeInput" class="session-name-input" disabled style="background:#f1f5f9;color:#64748b;font-family:monospace;letter-spacing:-0.5px">
+                    </div>
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span style="font-size:12px;color:var(--text-tertiary);width:45px;">Menjadi:</span>
+                        <input type="text" id="newTimeInput" class="session-name-input" maxlength="20" autocomplete="off" style="font-family:monospace;letter-spacing:-0.5px">
+                    </div>
+                </div>
+                <div class="modal-buttons" style="margin-top:20px">
+                    <button class="modal-btn modal-btn-secondary" onclick="closeChangeTimeModal()">BATAL</button>
+                    <button class="modal-btn modal-btn-primary" onclick="confirmChangeTime()">&#10004; SIMPAN</button>
+                </div>
+            </div>
+        </div>
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>

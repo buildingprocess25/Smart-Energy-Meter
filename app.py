@@ -24,7 +24,7 @@ def _detect_phases(device_data: dict) -> list[str]:
     keys: set[str] = set()
     for src in [device_data.get('RealTime') or {}, (device_data.get('meta') or {}).get('sensors') or {}]:
         if isinstance(src, dict): keys.update(k for k in src if _PHASE_RE.match(k))
-    return sorted(keys, key=lambda x: int(x[1:])) or ['L1']
+    return sorted(keys, key=lambda x: int(x[1:]))
 def _fb(method: str, path: str, **kw):
     try:
         r = http_requests.request(method, f'{DB_URL}/{path}.json', timeout=6, **kw)
@@ -75,7 +75,7 @@ _capture_state = {
     'active': False, 'device_id': None, 'device_name': None,
     'session_id': None, 'session_name': None, 'interval': 3,
     'count': 0, 'started_at': None, 'enabled_phases': None,
-    '_thread': None, '_stop_event': None, '_wake_event': None, '_finalizing': False,
+    '_thread': None, '_stop_event': None, '_wake_event': None, '_finalizing': False, 'time_offset_ms': 0,
 }
 def _data_hash(raw): return hashlib.md5(json.dumps(raw, sort_keys=True).encode()).hexdigest() if raw else None
 _hourly_stop = threading.Event()
@@ -96,7 +96,8 @@ def _do_hourly_capture_device(device_id: str) -> None:
         key = f'{now.strftime("%H")}{str(m).zfill(2)}'
         date_str = now.strftime('%Y-%m-%d')
         ts  = f'{now.strftime("%H")}:{str(m).zfill(2)} {now.strftime("%d/%m/%Y")}'
-        phases = sorted([k for k in raw if _PHASE_RE.match(k)], key=lambda x: int(x[1:])) or ['L1']
+        phases = sorted([k for k in raw if _PHASE_RE.match(k)], key=lambda x: int(x[1:]))
+        if not phases: return
         def _w(ph: str) -> None:
             pd = raw.get(ph) or {}
             def f(k):
@@ -162,17 +163,19 @@ def _hourly_worker() -> None:
         if _hourly_stop.wait(timeout=INTERVAL): break
         _do_hourly_capture_all()
 threading.Thread(target=_hourly_worker, daemon=True).start()
-def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_change, enabled_phases):
+def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_change, enabled_phases, time_offset_ms):
     try:
         raw = fb_get(f'devices/{device_id}/RealTime')
         h   = _data_hash(raw); now = time.time()
         if h != last_hash[0]: last_hash[0] = h; last_change[0] = now
         stale   = (now - last_change[0]) if last_change[0] else float('inf')
         offline = raw is None or normalize(raw) is None or stale > max(interval * 2, 6)
-        ts  = datetime.fromtimestamp(sched_ts, tz=_WIB).strftime('%H:%M:%S %d/%m/%Y')
+        sched_shifted = sched_ts + (time_offset_ms / 1000.0)
+        ts  = datetime.fromtimestamp(sched_shifted, tz=_WIB).strftime('%H:%M:%S %d/%m/%Y')
         key = f'capture_{int(sched_ts * 1000)}'
-        all_ph = sorted([k for k in (raw or {}) if _PHASE_RE.match(k)], key=lambda x: int(x[1:])) or ['L1']
+        all_ph = sorted([k for k in (raw or {}) if _PHASE_RE.match(k)], key=lambda x: int(x[1:]))
         phases = ([p for p in all_ph if p in enabled_phases] or enabled_phases) if enabled_phases else all_ph
+        if not phases: return
         def _w(ph: str) -> None:
             pd = {} if offline else ((raw or {}).get(ph) if isinstance((raw or {}).get(ph), dict) else {})
             def f(k):
@@ -198,15 +201,16 @@ def _capture_worker(stop: threading.Event, wake: threading.Event) -> None:
         if stop.wait(timeout=min(max(0., nxt - time.time()), 0.2)): break
         if wake.is_set():
             wake.clear()
-            with _capture_lock: nxt = time.time() + _capture_state['interval']
+            with _capture_lock: nxt = _capture_state.get('started_at', time.time())
             continue
         if time.time() < nxt: continue
         with _capture_lock:
             if not _capture_state['active']: break
             sid = _capture_state['session_id']; did = _capture_state['device_id']
             iv  = float(_capture_state['interval']); ep = _capture_state.get('enabled_phases')
+            to_ms = _capture_state.get('time_offset_ms', 0)
         sched = nxt; nxt += iv
-        threading.Thread(target=_do_capture_io, args=(did, sid, sched, iv, last_hash, last_change, ep), daemon=True).start()
+        threading.Thread(target=_do_capture_io, args=(did, sid, sched, iv, last_hash, last_change, ep, to_ms), daemon=True).start()
 def _start_thread() -> None:
     se, we = threading.Event(), threading.Event()
     t = threading.Thread(target=_capture_worker, args=(se, we), daemon=True)
@@ -336,17 +340,18 @@ def capture_start():
     iv    = max(1, int(body.get('interval', 3)))
     hints = sorted([p for p in (body.get('phases') or []) if _PHASE_RE.match(p)], key=lambda x: int(x[1:]))
     if not did: return jsonify({'ok': False, 'error': 'deviceId harus diisi'}), 400
+    if not hints: return jsonify({'ok': False, 'error': 'Minimal 1 phase harus diaktifkan'}), 400
     with _capture_lock:
         if _capture_state['active'] or _capture_state.get('_finalizing'):
             return jsonify({'ok': False, 'error': 'Capture sudah berjalan atau sedang finalisasi'}), 409
         sid    = f'session_{int(time.time() * 1000)}'
         now_s  = _ts_now()
-        phases = hints or ['L1']
-        ep     = hints or None
+        phases = hints
+        ep     = hints
         _capture_state.update({
             'active': True, 'device_id': did, 'device_name': dname or did,
             'session_id': sid, 'session_name': sname, 'interval': iv,
-            'count': 0, 'started_at': now_s, 'enabled_phases': ep,
+            'count': 0, 'started_at': now_s, 'enabled_phases': ep, 'time_offset_ms': 0,
         })
         meta = {
             'id': sid, 'name': sname, 'deviceId': did, 'deviceName': dname or did,
@@ -382,5 +387,16 @@ def capture_interval():
         ev = _capture_state.get('_wake_event')
         if ev: ev.set()
     return jsonify({'ok': True, 'interval': iv})
+
+@app.route('/api/capture/shift_time', methods=['POST'])
+def capture_shift_time():
+    body = request.get_json(silent=True) or {}
+    delta_ms = int(body.get('deltaMs', 0))
+    sid = body.get('sessionId')
+    with _capture_lock:
+        if _capture_state['active'] and _capture_state['session_id'] == sid:
+            _capture_state['time_offset_ms'] = _capture_state.get('time_offset_ms', 0) + delta_ms
+            return jsonify({'ok': True})
+    return jsonify({'ok': False, 'error': 'Tidak ada capture aktif untuk sesi ini'})
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

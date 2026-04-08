@@ -1372,19 +1372,28 @@ async function loadDevices() {
         _deviceListCache = devices;
         const visible = devices;
         if (!visible.length) return;
-        if (!selectedDeviceId) {
+        
+        const initialLoad = !selectedDeviceId;
+        if (initialLoad) {
             selectedDeviceId = visible[0].id;
             selectedDeviceName = visible[0].name || visible[0].id;
+        }
+        const activeDev = visible.find(d => d.id === selectedDeviceId);
+        if (!initialLoad && activeDev) {
+            selectedDeviceName = activeDev.name || activeDev.id;
+        }
+
+        if (initialLoad && activeDev) {
+            isConnected = !!activeDev.online;
+            lastDataTimestamp = isConnected ? Date.now() : 0;
+            updateConnectionStatus(isConnected);
             _attachRealtimeListener(selectedDeviceId);
             _attachHistoryListener(selectedDeviceId);
             _attachHourlyListener(selectedDeviceId);
             _attachDayListener(selectedDeviceId);
-        } else {
-            const activeDev = visible.find(d => d.id === selectedDeviceId);
-            if (activeDev) selectedDeviceName = activeDev.name || activeDev.id;
         }
+
         _populateDeviceSelect(visible);
-        const activeDev = visible.find(d => d.id === selectedDeviceId);
         if (activeDev) {
             renderDeviceList([activeDev]);
             if (activeDev.phases?.length) {
@@ -1560,9 +1569,8 @@ async function onDeviceChange(deviceId) {
     updatePhaseSelector([]);
     resetChartData();
     rawRealtimeData = null;
-    if (realtimeChart) { realtimeChart.destroy(); realtimeChart = null; }
     initChart();
-    updateConnectionStatus(false);
+    updateConnectionStatus('connecting');
     updateDisplayCardsBlank();
     lastDataTimestamp = 0;
     historyData = []; recordsBySession = {}; sessionsData = {};
@@ -1712,9 +1720,12 @@ function _attachRealtimeListener(deviceId) {
 function updateConnectionStatus(connected) {
     const dot = DOM.statusDot, txt = DOM.statusText;
     if (!dot || !txt) return;
-    dot.classList.remove('connecting');
-    dot.classList.toggle('online', connected);
-    dot.classList.toggle('offline', !connected);
+    if (connected === 'connecting') {
+        dot.className = 'status-dot connecting';
+        txt.textContent = 'CONNECTING';
+        return;
+    }
+    dot.className = 'status-dot ' + (connected ? 'online' : 'offline');
     txt.textContent = connected ? 'ONLINE' : 'OFFLINE';
     if (!connected) updateDisplayCardsBlank();
 }
@@ -1763,7 +1774,7 @@ function _attachHistoryListener(deviceId) {
                             }
                             return;
                         }
-                        const record = { ...recordSnap.val(), sessionId: sid, _phase: phase };
+                        const record = { ...recordSnap.val(), sessionId: sid, _phase: phase, _key: recordSnap.key };
                         historyData.push(record);
                         recordsBySession[sid][phase].push(record);
                     });
@@ -1868,7 +1879,12 @@ function buildSessionUI() {
         });
         const allPhaseRecords = Object.values(recordsBySession[session.id] || {}).flat();
         const isActive = session.id === currentSessionId && captureActive;
-        const actionBtns = isActive ? '' : `
+        let actionBtns = `
+            <button class="session-rename-btn" onclick="openChangeTimeModal('${session.id}','${session.startTime}','${_escapeAttr(session.name)}',event)" title="Ubah Waktu" style="color:var(--text-secondary)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            </button>`;
+        if (!isActive) {
+            actionBtns += `
             <button class="session-export-btn" onclick="exportSession('${session.id}','${_escapeAttr(session.name)}',event)" title="Export">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
             </button>
@@ -1878,6 +1894,7 @@ function buildSessionUI() {
             <button class="session-delete-btn" onclick="deleteSession('${session.id}','${_escapeAttr(session.name)}',event)" title="Hapus">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6m4-6v6"></path></svg>
             </button>`;
+        }
         const phaseBlocks = phases.map(p => `
             <div class="session-phase-block" id="phase-block_${session.id}_${p.phase}">
                 <div class="session-phase-header" id="sph-view_${session.id}_${p.phase}"
@@ -2343,13 +2360,127 @@ async function confirmStartCapture() {
         _captureTransitioning = false;
     }
 }
+
+let _timeEditSessionId = null;
+
+function openChangeTimeModal(sessionId, currentStartTime, sessionName, event) {
+    if (event) event.stopPropagation();
+    _timeEditSessionId = sessionId;
+    $('oldTimeInput').value = currentStartTime || '---';
+    $('newTimeInput').value = currentStartTime || '';
+    $('changeTimeModal').classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeChangeTimeModal() {
+    _timeEditSessionId = null;
+    $('changeTimeModal').classList.remove('active');
+    document.body.style.overflow = '';
+}
+
+async function confirmChangeTime() {
+    const sessionId = _timeEditSessionId;
+    if (!sessionId) return;
+    const oldTimeStr = $('oldTimeInput').value;
+    const newTimeStr = $('newTimeInput').value.trim();
+    if (!newTimeStr) {
+        showModal('Error', 'Waktu baru tidak boleh kosong', 'warning');
+        return;
+    }
+    if (oldTimeStr === newTimeStr) {
+        closeChangeTimeModal();
+        return;
+    }
+    const oldDate = parseTimestamp(oldTimeStr);
+    const newDate = parseTimestamp(newTimeStr);
+    if (isNaN(oldDate.getTime()) || isNaN(newDate.getTime())) {
+        showModal('Error', 'Format waktu tidak valid! Gunakan: HH:MM:SS DD/MM/YYYY', 'warning');
+        return;
+    }
+    
+    const deltaMs = newDate.getTime() - oldDate.getTime();
+    
+    try {
+        closeChangeTimeModal();
+        showGlobalLoader();
+        
+        try {
+            await fetch('/api/capture/shift_time', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId, deltaMs })
+            });
+        } catch(err) { console.error('Failed to shift backend time', err); }
+        
+        let snap;
+        for (let i = 0; i < 5; i++) {
+            snap = await database.ref(`devices/${selectedDeviceId}/History`).get();
+            let hasRecord = false;
+            if (snap.exists()) {
+                snap.forEach(phaseSnap => {
+                    const sSnap = phaseSnap.child(sessionId);
+                    if (sSnap.exists() && Object.keys(sSnap.val() || {}).length > 1) {
+                        hasRecord = true;
+                    }
+                });
+            }
+            if (hasRecord) break;
+            await new Promise(r => setTimeout(r, 600));
+        }
+        
+        let updates = {};
+        const p2 = v => String(v).padStart(2, '0');
+        const serializeTs = (date) => `${p2(date.getHours())}:${p2(date.getMinutes())}:${p2(date.getSeconds())} ${p2(date.getDate())}/${p2(date.getMonth() + 1)}/${date.getFullYear()}`;
+        
+        const newStartTime = serializeTs(newDate);
+        
+        if (snap && snap.exists()) {
+            snap.forEach(phaseSnap => {
+                const ph = phaseSnap.key;
+                if (!/^L\d+$/.test(ph)) return;
+                const sessSnap = phaseSnap.child(sessionId);
+                if (sessSnap.exists()) {
+                    const meta = sessSnap.child('_meta').val() || {};
+                    updates[`devices/${selectedDeviceId}/History/${ph}/${sessionId}/_meta/startTime`] = newStartTime;
+                    if (meta.startTimestamp) {
+                        updates[`devices/${selectedDeviceId}/History/${ph}/${sessionId}/_meta/startTimestamp`] = (meta.startTimestamp || 0) + deltaMs;
+                    }
+                    
+                    sessSnap.forEach(recSnap => {
+                        if (recSnap.key === '_meta') return;
+                        const rec = recSnap.val();
+                        if (!rec.timestamp) return;
+                        const recDate = parseTimestamp(rec.timestamp);
+                        if (isNaN(recDate.getTime())) return;
+                        const shiftedDate = new Date(recDate.getTime() + deltaMs);
+                        updates[`devices/${selectedDeviceId}/History/${ph}/${sessionId}/${recSnap.key}/timestamp`] = serializeTs(shiftedDate);
+                    });
+                }
+            });
+        }
+        
+        if (Object.keys(updates).length > 0) {
+            await database.ref().update(updates);
+        }
+        
+        hideGlobalLoader();
+        showModal('Sukses', 'Waktu sesi berhasil diubah dan disinkronkan.', 'success');
+        buildSessionUI();
+        
+    } catch(e) {
+        hideGlobalLoader();
+        showModal('Error', 'Gagal mengubah waktu! Error: ' + e.message, 'error');
+    }
+}
+
 async function deleteSession(sessionId, sessionName, event) {
     event.stopPropagation();
     const confirmed = await showModal('Hapus Sesi', `Hapus sesi:\n"${sessionName}"\n\nSemua record akan ikut terhapus.`, 'warning', ['confirm']);
     if (!confirmed) return;
     try {
-        const phases = getDevicePhasesWithNames();
-        const phaseKeys = phases.length > 0 ? phases.map(p => p.phase) : Object.keys(recordsBySession[sessionId] || {});
+        const historyPhaseKeys = Object.keys(recordsBySession[sessionId] || {});
+        const activePhases = getDevicePhasesWithNames().map(p => p.phase);
+        const phaseKeys = Array.from(new Set([...historyPhaseKeys, ...activePhases]));
         if (phaseKeys.length > 0) {
             await Promise.all(phaseKeys.map(ph => database.ref(`devices/${selectedDeviceId}/History/${ph}/${sessionId}`).remove()));
         } else {
@@ -2393,7 +2524,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         setTimeout(() => globalLoader.style.display = 'none', 500);
     }
     setInterval(loadDevices, 30_000);
-    updateConnectionStatus(false);
+    updateConnectionStatus('connecting');
     startConnectionMonitoring();
     startTimeWindowMonitoring();
     await syncCaptureStatus();
