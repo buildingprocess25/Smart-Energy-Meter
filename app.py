@@ -216,14 +216,16 @@ def _start_thread() -> None:
     t = threading.Thread(target=_capture_worker, args=(se, we), daemon=True)
     t.start()
     _capture_state.update({'_thread': t, '_stop_event': se, '_wake_event': we})
-def _finalize_bg(sid, did, count, se, th, enabled_phases) -> None:
+def _finalize_bg(sid, did, count, se, th, enabled_phases, time_offset_ms) -> None:
     try:
         if se: se.set()
         if th and th.is_alive(): th.join(timeout=5)
         time.sleep(1.5)
         if sid and did:
             phases  = enabled_phases or _detect_phases(fb_get(f'devices/{did}') or {})
-            payload = {'endTime': _ts_now(), 'recordCount': count}
+            ended_ts = time.time() + (time_offset_ms / 1000.0)
+            end_time_str = datetime.fromtimestamp(ended_ts, tz=_WIB).strftime('%H:%M:%S %d/%m/%Y')
+            payload = {'endTime': end_time_str, 'recordCount': count}
             ts_list = [threading.Thread(target=fb_patch, args=(f'devices/{did}/History/{ph}/{sid}/_meta', payload), daemon=True) for ph in phases]
             for t in ts_list: t.start()
             for t in ts_list: t.join(timeout=8)
@@ -237,12 +239,13 @@ def _stop_and_respond() -> None:
         sid = _capture_state['session_id']; did = _capture_state['device_id']
         cnt = _capture_state['count'];      se  = _capture_state.get('_stop_event')
         th  = _capture_state.get('_thread'); ep = _capture_state.get('enabled_phases')
+        to_ms = _capture_state.get('time_offset_ms', 0)
         _capture_state.update({
             'device_id': None, 'device_name': None, 'session_id': None, 'session_name': None,
             'count': 0, 'started_at': None, 'enabled_phases': None,
             '_thread': None, '_stop_event': None, '_wake_event': None,
         })
-    threading.Thread(target=_finalize_bg, args=(sid, did, cnt, se, th, ep), daemon=True).start()
+    threading.Thread(target=_finalize_bg, args=(sid, did, cnt, se, th, ep, to_ms), daemon=True).start()
 @app.route('/')
 def index(): return render_template('index.html', firebase_config=FIREBASE_CONFIG)
 @app.route('/health', methods=['GET'])
@@ -396,7 +399,8 @@ def capture_shift_time():
     with _capture_lock:
         if _capture_state['active'] and _capture_state['session_id'] == sid:
             _capture_state['time_offset_ms'] = _capture_state.get('time_offset_ms', 0) + delta_ms
-            return jsonify({'ok': True})
+            shift_epoch = time.time()
+            return jsonify({'ok': True, 'shift_epoch': shift_epoch})
     return jsonify({'ok': False, 'error': 'Tidak ada capture aktif untuk sesi ini'})
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

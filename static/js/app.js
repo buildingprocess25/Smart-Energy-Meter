@@ -2391,9 +2391,18 @@ async function confirmChangeTime() {
         closeChangeTimeModal();
         return;
     }
+    
+    const formatRegex = /^\d{2}:\d{2}:\d{2} \d{2}\/\d{2}\/\d{4}$/;
+    if (!formatRegex.test(newTimeStr)) {
+        closeChangeTimeModal();
+        showModal('Format Tidak Valid', 'Mohon masukkan waktu sesuai format:\nHH:MM:SS DD/MM/YYYY\nContoh: 14:30:00 08/04/2026', 'warning');
+        return;
+    }
+    
     const oldDate = parseTimestamp(oldTimeStr);
     const newDate = parseTimestamp(newTimeStr);
     if (isNaN(oldDate.getTime()) || isNaN(newDate.getTime())) {
+        closeChangeTimeModal();
         showModal('Error', 'Format waktu tidak valid! Gunakan: HH:MM:SS DD/MM/YYYY', 'warning');
         return;
     }
@@ -2404,19 +2413,11 @@ async function confirmChangeTime() {
         closeChangeTimeModal();
         showGlobalLoader();
         
-        try {
-            await fetch('/api/capture/shift_time', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId, deltaMs })
-            });
-        } catch(err) { console.error('Failed to shift backend time', err); }
-        
         let snap;
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 15; i++) {
             snap = await database.ref(`devices/${selectedDeviceId}/History`).get();
             let hasRecord = false;
-            if (snap.exists()) {
+            if (snap && snap.exists()) {
                 snap.forEach(phaseSnap => {
                     const sSnap = phaseSnap.child(sessionId);
                     if (sSnap.exists() && Object.keys(sSnap.val() || {}).length > 1) {
@@ -2428,14 +2429,74 @@ async function confirmChangeTime() {
             await new Promise(r => setTimeout(r, 600));
         }
         
+        let oldestRecTs = Infinity;
+        if (snap && snap.exists()) {
+            snap.forEach(phaseSnap => {
+                const ph = phaseSnap.key;
+                if (!/^L\d+$/.test(ph)) return;
+                const sessSnap = phaseSnap.child(sessionId);
+                if (sessSnap.exists()) {
+                    sessSnap.forEach(recSnap => {
+                        if (recSnap.key === '_meta') return;
+                        const rec = recSnap.val();
+                        if (rec.timestamp) {
+                            const recDate = parseTimestamp(rec.timestamp);
+                            if (!isNaN(recDate.getTime()) && recDate.getTime() < oldestRecTs) {
+                                oldestRecTs = recDate.getTime();
+                            }
+                        }
+                    });
+                }
+            });
+        }
+        
+        if (oldestRecTs === Infinity) oldestRecTs = oldDate.getTime();
+        const deltaMs = newDate.getTime() - oldestRecTs;
+        
+        let shiftEpoch = Infinity;
+        try {
+            const res = await fetch('/api/capture/shift_time', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId, deltaMs })
+            }).then(r => r.json());
+            if (res && res.shift_epoch) shiftEpoch = res.shift_epoch * 1000;
+        } catch(err) { console.error('Failed to shift backend time', err); }
+        
+        await new Promise(r => setTimeout(r, 3500));
+        
         let updates = {};
         const p2 = v => String(v).padStart(2, '0');
         const serializeTs = (date) => `${p2(date.getHours())}:${p2(date.getMinutes())}:${p2(date.getSeconds())} ${p2(date.getDate())}/${p2(date.getMonth() + 1)}/${date.getFullYear()}`;
-        
         const newStartTime = serializeTs(newDate);
         
-        if (snap && snap.exists()) {
-            snap.forEach(phaseSnap => {
+        const finalSnap = await database.ref(`devices/${selectedDeviceId}/History`).get();
+        let latestRecTs = 0;
+        
+        if (finalSnap && finalSnap.exists()) {
+            finalSnap.forEach(phaseSnap => {
+                const ph = phaseSnap.key;
+                if (!/^L\d+$/.test(ph)) return;
+                const sessSnap = phaseSnap.child(sessionId);
+                if (sessSnap.exists()) {
+                    sessSnap.forEach(recSnap => {
+                        if (recSnap.key === '_meta') return;
+                        const rec = recSnap.val();
+                        if (!rec.timestamp) return;
+                        
+                        const schedTsStr = recSnap.key.replace('capture_', '');
+                        const schedTs = parseInt(schedTsStr);
+                        const recDate = parseTimestamp(rec.timestamp).getTime();
+                        if (isNaN(recDate)) return;
+                        
+                        const isAlreadyShifted = (!isNaN(schedTs) && schedTs >= shiftEpoch);
+                        const finalTs = isAlreadyShifted ? recDate : recDate + deltaMs;
+                        if (finalTs > latestRecTs) latestRecTs = finalTs;
+                    });
+                }
+            });
+            
+            finalSnap.forEach(phaseSnap => {
                 const ph = phaseSnap.key;
                 if (!/^L\d+$/.test(ph)) return;
                 const sessSnap = phaseSnap.child(sessionId);
@@ -2445,9 +2506,16 @@ async function confirmChangeTime() {
                     if (meta.startTimestamp) {
                         updates[`devices/${selectedDeviceId}/History/${ph}/${sessionId}/_meta/startTimestamp`] = (meta.startTimestamp || 0) + deltaMs;
                     }
+                    if (meta.endTime && meta.endTime !== '---' && latestRecTs > 0) {
+                        updates[`devices/${selectedDeviceId}/History/${ph}/${sessionId}/_meta/endTime`] = serializeTs(new Date(latestRecTs));
+                    }
                     
                     sessSnap.forEach(recSnap => {
                         if (recSnap.key === '_meta') return;
+                        const schedTsStr = recSnap.key.replace('capture_', '');
+                        const schedTs = parseInt(schedTsStr);
+                        if (!isNaN(schedTs) && schedTs >= shiftEpoch) return;
+                        
                         const rec = recSnap.val();
                         if (!rec.timestamp) return;
                         const recDate = parseTimestamp(rec.timestamp);

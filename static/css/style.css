@@ -1,33 +1,94 @@
 @import url('https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,300;0,400;0,600;0,700;0,800;0,900;1,400&family=Fira+Code:wght@400;500&display=swap');
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 :root {
-    --brand:        #006400;
-    --brand-dark:   #004b00;
-    --brand-muted:  rgba(0,100,0,0.07);
-    --brand-glow:   rgba(0,100,0,0.18);
-    --yellow:       #ffc604;
-    --yellow-dark:  #d0a100;
-    --yellow-muted: rgba(255,198,4,0.10);
-    --blue:         #005da6;
-    --blue-dark:    #004073;
-    --blue-muted:   rgba(0,93,166,0.08);
-    --green:        #28a745;
-    --green-muted:  rgba(40,167,69,0.08);
-    --purple:       #6f42c1;
-    --amber:        #ffc604;
-    --bg:           #f1f3f4;
-    --bg-2:         #e2e6e9;
-    --surface:      #FFFFFF;
-    --surface-2:    #fafafa;
-    --surface-3:    #f1f3f4;
-    --glass:        rgba(255,255,255,0.85);
-    --glass-border: rgba(255,255,255,0.6);
-    --border:       rgba(0,0,0,0.07);
-    --border-hover: rgba(0,0,0,0.14);
-    --text-primary:   #1a1e22;
-    --text-secondary: #4e5964;
-    --text-tertiary:  #9ca7b2;
-    --text-inverse:   #FFFFFF;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.005 285.823);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.141 0.005 285.823);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.141 0.005 285.823);
+  --primary: oklch(0.508 0.118 165.612);
+  --primary-foreground: oklch(0.979 0.021 166.113);
+  --secondary: oklch(0.967 0.001 286.375);
+  --secondary-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --accent: oklch(0.508 0.118 165.612);
+  --accent-foreground: oklch(0.979 0.021 166.113);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.92 0.004 286.32);
+  --input: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.705 0.015 286.067);
+  --chart-1: oklch(0.437 0.078 188.216);
+  --chart-2: oklch(0.704 0.14 182.503);
+  --chart-3: oklch(0.6 0.118 184.704);
+  --chart-4: oklch(0.511 0.096 186.391);
+  --chart-5: oklch(0.437 0.078 188.216);
+
+  --brand:        var(--primary);
+  --brand-dark:   color-mix(in srgb, var(--primary) 80%, black);
+  --brand-muted:  color-mix(in srgb, var(--primary) 12%, transparent);
+  --brand-glow:   color-mix(in srgb, var(--primary) 22%, transparent);
+  
+  --yellow:       var(--chart-3);
+  --yellow-dark:  color-mix(in srgb, var(--chart-3) 80%, black);
+  --yellow-muted: color-mix(in srgb, var(--chart-3) 15%, transparent);
+  
+  --blue:         var(--chart-1);
+  --blue-dark:    color-mix(in srgb, var(--chart-1) 80%, black);
+  --blue-muted:   color-mix(in srgb, var(--chart-1) 15%, transparent);
+  
+  --green:        var(--chart-2);
+  --green-muted:  color-mix(in srgb, var(--chart-2) 15%, transparent);
+  
+  --purple:       var(--chart-5);
+  --amber:        var(--chart-4);
+  
+  --bg:           var(--background);
+  --bg-2:         var(--secondary);
+  --surface:      var(--card);
+  --surface-2:    var(--popover);
+  --surface-3:    var(--muted);
+  
+  --glass:        color-mix(in srgb, var(--card) 85%, transparent);
+  --glass-border: color-mix(in srgb, var(--border) 60%, transparent);
+  
+  --border-hover: var(--ring);
+  
+  --text-primary:   var(--foreground);
+  --text-secondary: var(--secondary-foreground);
+  --text-tertiary:  var(--muted-foreground);
+  --text-inverse:   var(--primary-foreground);
+  
+}
+
+.dark {
+  --background: oklch(0.205 0.012 167.2);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.24 0.014 167.4);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.24 0.014 167.4);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.62 0.12 166.9);
+  --primary-foreground: oklch(0.979 0.021 166.113);
+  --secondary: oklch(0.305 0.02 167.8);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.29 0.016 167.6);
+  --muted-foreground: oklch(0.78 0.01 168.4);
+  --accent: oklch(0.62 0.12 166.9);
+  --accent-foreground: oklch(0.979 0.021 166.113);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(0.58 0.01 167.6 / 28%);
+  --input: oklch(0.58 0.01 167.6 / 34%);
+  --ring: oklch(0.62 0.03 167.2);
+  --chart-1: oklch(0.855 0.138 181.071);
+  --chart-2: oklch(0.704 0.14 182.503);
+  --chart-3: oklch(0.6 0.118 184.704);
+  --chart-4: oklch(0.511 0.096 186.391);
+  --chart-5: oklch(0.437 0.078 188.216);
+}
+
+:root {
     --header-h:  70px;
     --nav-h:     46px;
     --radius-card:   .75rem 0 .75rem 0;
@@ -723,15 +784,13 @@ mark.search-highlight { background: rgba(187,23,36,0.12); color: var(--brand); b
 .modal-icon {
     width: 58px; height: 58px; margin: 0 auto 18px;
     border-radius: .75rem 0 .75rem 0;
-    background: linear-gradient(135deg, var(--brand), var(--brand-dark));
     display: flex; align-items: center; justify-content: center;
-    box-shadow: var(--shadow-brand);
 }
 .modal-icon svg { width: 26px; height: 26px; color: #fff; }
-.modal-icon.success { background: linear-gradient(135deg, #28a745, #1e7e34); box-shadow: 0 4px 16px rgba(40,167,69,0.3); }
-.modal-icon.warning { background: linear-gradient(135deg, var(--yellow), var(--yellow-dark)); box-shadow: 0 4px 16px rgba(255,198,4,0.35); }
-.modal-icon.error   { background: linear-gradient(135deg, var(--brand), var(--brand-dark)); box-shadow: var(--shadow-brand); }
-.modal-icon.info    { background: linear-gradient(135deg, var(--blue), var(--blue-dark)); box-shadow: var(--shadow-blue); }
+.modal-icon.success { background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 70%, black)); box-shadow: 0 4px 16px color-mix(in srgb, var(--primary) 35%, transparent); }
+.modal-icon.warning { background: linear-gradient(135deg, oklch(0.75 0.15 65), oklch(0.6 0.15 65)); box-shadow: 0 4px 16px color-mix(in srgb, oklch(0.75 0.15 65) 35%, transparent); }
+.modal-icon.error   { background: linear-gradient(135deg, var(--destructive), color-mix(in srgb, var(--destructive) 70%, black)); box-shadow: 0 4px 16px color-mix(in srgb, var(--destructive) 35%, transparent); }
+.modal-icon.info    { background: linear-gradient(135deg, var(--chart-1), color-mix(in srgb, var(--chart-1) 70%, black)); box-shadow: 0 4px 16px color-mix(in srgb, var(--chart-1) 35%, transparent); }
 .modal-title   { font-size: 18px; font-weight: 900; color: var(--text-primary); margin-bottom: 10px; letter-spacing: -0.3px; }
 .modal-message { font-size: 13.5px; color: var(--text-secondary); line-height: 1.65; margin-bottom: 24px; white-space: pre-line; font-weight: 600; }
 .modal-buttons { display: flex; gap: 10px; justify-content: center; }
