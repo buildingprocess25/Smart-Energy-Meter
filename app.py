@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os, re, threading, time, hashlib, json, logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import requests as http_requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
@@ -59,7 +59,8 @@ def normalize(raw: dict | None) -> dict | None:
             'EnergyReactive': sum(g(p, 'Reactive Energy (kVARh)') for p in phases),
         }
     except: return None
-def _ts_now() -> str: return datetime.now().strftime('%H:%M:%S %d/%m/%Y')
+_WIB = timezone(timedelta(hours=7))
+def _ts_now() -> str: return datetime.now(_WIB).strftime('%H:%M:%S %d/%m/%Y')
 def validate_device_name(name: str) -> tuple[bool, str]:
     if not name or not isinstance(name, str): return False, 'Nama harus berupa text'
     name = name.strip()
@@ -90,7 +91,7 @@ def _do_hourly_capture_device(device_id: str) -> None:
             return
         _device_hourly_hash[device_id] = h
         
-        now = datetime.now()
+        now = datetime.now(_WIB)
         m   = (now.minute // 5) * 5
         key = f'{now.strftime("%H")}{str(m).zfill(2)}'
         date_str = now.strftime('%Y-%m-%d')
@@ -121,7 +122,7 @@ def _do_hourly_capture_device(device_id: str) -> None:
     except Exception: pass
 def _do_day_capture_device(device_id: str) -> None:
     try:
-        today  = datetime.now().strftime('%Y-%m-%d')
+        today  = datetime.now(_WIB).strftime('%Y-%m-%d')
         hourly = fb_get(f'devices/{device_id}/HourlyCapture/{today}') or {}
         phases = sorted([k for k in hourly if _PHASE_RE.match(k)], key=lambda x: int(x[1:]))
         for ph in phases:
@@ -152,7 +153,7 @@ def _do_hourly_capture_all() -> None:
     except Exception: pass
 def _hourly_worker() -> None:
     INTERVAL = 300
-    now = datetime.now()
+    now = datetime.now(_WIB)
     ns  = now.replace(minute=((now.minute // 5) + 1) * 5 % 60, second=0, microsecond=0)
     if ns <= now: ns += timedelta(hours=1)
     if not _hourly_stop.wait(timeout=(ns - now).total_seconds()):
@@ -168,7 +169,7 @@ def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_ch
         if h != last_hash[0]: last_hash[0] = h; last_change[0] = now
         stale   = (now - last_change[0]) if last_change[0] else float('inf')
         offline = raw is None or normalize(raw) is None or stale > max(interval * 2, 6)
-        ts  = datetime.fromtimestamp(sched_ts).strftime('%H:%M:%S %d/%m/%Y')
+        ts  = datetime.fromtimestamp(sched_ts, tz=_WIB).strftime('%H:%M:%S %d/%m/%Y')
         key = f'capture_{int(sched_ts * 1000)}'
         all_ph = sorted([k for k in (raw or {}) if _PHASE_RE.match(k)], key=lambda x: int(x[1:])) or ['L1']
         phases = ([p for p in all_ph if p in enabled_phases] or enabled_phases) if enabled_phases else all_ph
