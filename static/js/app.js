@@ -1579,7 +1579,7 @@ function renderDeviceList(devices) {
                     <span class="device-online-dot ${dotClass}"></span>
                     <div>
                         <p class="device-item-name" id="label_${d.id}">${d.name || d.id}</p>
-                        <p class="device-item-id">${d.phaseCount || 0} phase · Last seen: ${d.lastSeen || '---'}</p>
+                        <p class="device-item-id">${d.phaseCount || 0} Sensor · Last seen: ${d.lastSeen || '---'}</p>
                     </div>
                 </div>
                 <button class="device-edit-btn" onclick="startRenameDevice('${d.id}')" title="Ubah nama">${editSVG}</button>
@@ -2405,6 +2405,16 @@ function _updateCaptureButtonUI(active) {
     if (!btn) return;
     btn.classList.toggle('active', active);
     btn.innerHTML = active ? CAPTURE_STOP_HTML : CAPTURE_START_HTML;
+
+    const clearBtn = document.querySelector('.btn-reset');
+    const intervalInput = document.getElementById('intervalInput');
+    const intervalUnit = document.getElementById('intervalUnit');
+    const intervalSetBtn = document.querySelector('.btn-set');
+
+    if (clearBtn) clearBtn.disabled = active;
+    if (intervalInput) intervalInput.disabled = active;
+    if (intervalUnit) intervalUnit.disabled = active;
+    if (intervalSetBtn) intervalSetBtn.disabled = active;
 }
 async function toggleCapture() {
     if (!captureActive) {
