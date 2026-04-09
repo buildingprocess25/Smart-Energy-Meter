@@ -31,6 +31,11 @@ def _fb(method: str, path: str, **kw):
         return r.json() if r.ok else None
     except Exception: return None
 fb_get    = lambda p:    _fb('GET',    p)
+def fb_get_shallow(path: str):
+    try:
+        r = http_requests.request('GET', f'{DB_URL}/{path}.json?shallow=true', timeout=5)
+        return r.json() if r.ok else None
+    except Exception: return None
 fb_put    = lambda p, d: _fb('PUT',    p, json=d) is not None
 fb_patch  = lambda p, d: _fb('PATCH',  p, json=d) is not None
 fb_delete = lambda p:    _fb('DELETE', p) is not None
@@ -87,9 +92,12 @@ def _do_hourly_capture_device(device_id: str) -> None:
         if not raw or not isinstance(raw, dict): return
         
         h = _data_hash(raw)
+        was_empty = (device_id not in _device_hourly_hash)
         if _device_hourly_hash.get(device_id) == h:
             return
         _device_hourly_hash[device_id] = h
+        if was_empty:
+            return
         
         now = datetime.now(_WIB)
         m   = (now.minute // 5) * 5
@@ -163,6 +171,37 @@ def _hourly_worker() -> None:
         if _hourly_stop.wait(timeout=INTERVAL): break
         _do_hourly_capture_all()
 threading.Thread(target=_hourly_worker, daemon=True).start()
+
+_device_live_hash = {}
+def _live_5min_worker() -> None:
+    time.sleep(2)
+    _cleanup_counter = 0
+    while True:
+        try:
+            now_ms = int(time.time() * 1000)
+            cutoff_ms = now_ms - (300 * 1000)
+            devices_meta = fb_get_shallow('devices') or {}
+            
+            for did in devices_meta.keys():
+                raw = fb_get(f'devices/{did}/RealTime')
+                if not raw or not isinstance(raw, dict): continue
+                
+                h = _data_hash(raw)
+                if _device_live_hash.get(did) == h: continue
+                _device_live_hash[did] = h
+                fb_put(f'devices/{did}/Live5Min/{now_ms}', raw)
+                
+            _cleanup_counter += 1
+            if _cleanup_counter >= 15:
+                _cleanup_counter = 0
+                for did in devices_meta.keys():
+                    live_keys = fb_get_shallow(f'devices/{did}/Live5Min') or {}
+                    keys_to_delete = [k for k in live_keys.keys() if k.isdigit() and int(k) < cutoff_ms]
+                    for k in keys_to_delete:
+                        fb_delete(f'devices/{did}/Live5Min/{k}')
+        except Exception: pass
+        time.sleep(1)
+threading.Thread(target=_live_5min_worker, daemon=True).start()
 def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_change, enabled_phases, time_offset_ms):
     try:
         raw = fb_get(f'devices/{device_id}/RealTime')

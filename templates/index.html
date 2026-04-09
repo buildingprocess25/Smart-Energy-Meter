@@ -80,7 +80,12 @@
                     <div class="summary-topbar-left">
                         <h2>Real-time Monitoring</h2>
                     </div>
-                    <div class="last-update" id="lastUpdate">Waiting for data…</div>
+                    <div class="summary-topbar-right">
+                        <div class="last-update connecting" id="lastUpdate">Waiting for data…</div>
+                        <select id="summaryDeviceSelect" class="summary-device-select-badge" onchange="onDeviceChange(this.value)">
+                            <option value="">Memuat device…</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="dashboard-grid">
                     <div class="metrics-col-wrap">
@@ -180,9 +185,9 @@
                                                 title="Maju">&#10095;</button>
                                         </div>
                                         <div class="time-filter-group">
-                                            <button class="time-filter-btn active" data-filter="all"
+                                            <button class="time-filter-btn" data-filter="all"
                                                 onclick="setTimeFilter('all')">Second</button>
-                                            <button class="time-filter-btn" data-filter="day"
+                                            <button class="time-filter-btn active" data-filter="day"
                                                 onclick="setTimeFilter('day')">Day</button>
                                             <button class="time-filter-btn" data-filter="week"
                                                 onclick="setTimeFilter('week')">Week</button>
@@ -202,6 +207,7 @@
                                 </div>
                             </div>
                             <div class="chart-container">
+                                <div id="chartSpinner" class="chart-spinner"></div>
                                 <canvas id="realtimeChart"></canvas>
                             </div>
                         </div>

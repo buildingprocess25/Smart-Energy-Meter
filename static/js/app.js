@@ -1,7 +1,7 @@
 firebase.initializeApp(firebaseConfig);
 const database = firebase.database();
-function showGlobalLoader() { const g = document.getElementById('globalLoader'); if(g){ g.style.display = 'flex'; void g.offsetWidth; g.classList.remove('hidden'); } }
-function hideGlobalLoader() { const g = document.getElementById('globalLoader'); if(g){ g.classList.add('hidden'); setTimeout(()=>g.classList.contains('hidden')&&(g.style.display='none'), 500); } }
+function showGlobalLoader() { const g = document.getElementById('globalLoader'); if (g) { g.style.display = 'flex'; void g.offsetWidth; g.classList.remove('hidden'); } }
+function hideGlobalLoader() { const g = document.getElementById('globalLoader'); if (g) { g.classList.add('hidden'); setTimeout(() => g.classList.contains('hidden') && (g.style.display = 'none'), 500); } }
 let realtimeData = null;
 let rawRealtimeData = null;
 let isConnected = false;
@@ -23,7 +23,7 @@ let dayFirebaseData = {};
 let _dayListenerAttached = null;
 let realtimeChart = null;
 let selectedParameter = 'voltage';
-let timeFilter = 'all';
+let timeFilter = 'day';
 let chartTargetDate = null;
 let _hourlyListenerDate = null;
 let _userIsZoomed = false;
@@ -44,7 +44,21 @@ function _scheduleRender() {
     if (_rafId) return;
     _rafId = requestAnimationFrame(_doRender);
 }
+function _showChartSpinner() {
+    const s = document.getElementById('chartSpinner');
+    if (s) s.classList.add('active');
+}
+function _hideChartSpinner() {
+    const s = document.getElementById('chartSpinner');
+    if (s) s.classList.remove('active');
+}
+function _fadeChartIn() {
+    _hideChartSpinner();
+    const canvas = document.getElementById('realtimeChart');
+    if (canvas && canvas.style.opacity === '0') canvas.style.opacity = '1';
+}
 function _doRender() {
+    _fadeChartIn();
     _rafId = null;
     _rafDirty = false;
     if (!realtimeChart || !_pageVisible || timeFilter !== 'all') return;
@@ -103,11 +117,11 @@ let _lastChartDay = -1;
 let _timeWindowCheckId = null;
 let _aggRebuildId = null;
 const PHASE_COLORS = [
-    { line: '#006400', bar: 'rgba(0,100,0,0.85)',   light: 'rgba(0,100,0,0.15)' },    // L1: Dark Green
+    { line: '#006400', bar: 'rgba(0,100,0,0.85)', light: 'rgba(0,100,0,0.15)' },    // L1: Dark Green
     { line: '#b38600', bar: 'rgba(179,134,0,0.85)', light: 'rgba(179,134,0,0.15)' },  // L2: Dark Gold
-    { line: '#004073', bar: 'rgba(0,64,115,0.85)',  light: 'rgba(0,64,115,0.15)' },   // L3: Deep Blue
-    { line: '#333333', bar: 'rgba(51,51,51,0.85)',   light: 'rgba(51,51,51,0.15)' },     // L4
-    { line: '#4a2311', bar: 'rgba(74,35,17,0.85)',   light: 'rgba(74,35,17,0.15)' },     // L5
+    { line: '#004073', bar: 'rgba(0,64,115,0.85)', light: 'rgba(0,64,115,0.15)' },   // L3: Deep Blue
+    { line: '#333333', bar: 'rgba(51,51,51,0.85)', light: 'rgba(51,51,51,0.15)' },     // L4
+    { line: '#4a2311', bar: 'rgba(74,35,17,0.85)', light: 'rgba(74,35,17,0.15)' },     // L5
 ];
 function getPhaseColors(phase) {
     const idx = parseInt(phase.slice(1)) - 1;
@@ -269,6 +283,7 @@ const DOM = {
     get historyCount() { return $('historyCount'); },
     get deviceList() { return $('deviceList'); },
     get deviceSelect() { return $('deviceSelect'); },
+    get summaryDeviceSelect() { return $('summaryDeviceSelect'); },
     get paramSelect() { return $('parameterSelect'); },
     get intervalDisplay() { return $('intervalDisplay'); },
 };
@@ -513,13 +528,13 @@ function rebuildCascadeFromRaw() {
 function getHourlyFirebaseData(phase, param) {
     const targetDateObj = chartTargetDate ? new Date(chartTargetDate + 'T00:00:00') : new Date();
     const todayDate = new Date();
-    todayDate.setHours(0,0,0,0);
+    todayDate.setHours(0, 0, 0, 0);
     const isToday = targetDateObj.getTime() === todayDate.getTime();
-    
+
     const targetStr = `${targetDateObj.getFullYear()}-${_p2(targetDateObj.getMonth() + 1)}-${_p2(targetDateObj.getDate())}`;
     const endHour = isToday ? new Date().getHours() : 23;
     const endMin = isToday ? (Math.floor(new Date().getMinutes() / 5) * 5) : 55;
-    
+
     const fieldMap = {
         voltage: 'Voltage',
         current: 'Current',
@@ -530,7 +545,7 @@ function getHourlyFirebaseData(phase, param) {
     };
     const field = fieldMap[param] || 'Voltage';
     const labels = [], values = [];
-    
+
     for (let h = 0; h <= endHour; h++) {
         const maxMin = (h === endHour) ? endMin : 55;
         for (let m = 0; m <= maxMin; m += 5) {
@@ -561,7 +576,7 @@ function _attachHourlyListener(deviceId) {
     _hourlyListenerDate = chartTargetDate;
     hourlyFirebaseData = {};
     const targetDate = chartTargetDate || new Date().toISOString().split('T')[0];
-    
+
     database.ref(`devices/${deviceId}/HourlyCapture/${targetDate}`).on('value', snap => {
         hourlyFirebaseData = {};
         if (snap.exists()) {
@@ -592,6 +607,7 @@ function _refreshDayChartFromFirebase() {
     realtimeChart.options.scales.y.min = yMin;
     realtimeChart.options.scales.y.max = yMax;
     realtimeChart.update('none');
+    _fadeChartIn();
 }
 function _attachDayListener(deviceId) {
     if (_dayListenerAttached === deviceId) {
@@ -630,6 +646,7 @@ function _refreshWeekChartFromFirebase() {
     realtimeChart.options.scales.y.min = yMin;
     realtimeChart.options.scales.y.max = yMax;
     realtimeChart.update('none');
+    _fadeChartIn();
 }
 function getDayViewData(phase, param) {
     const fieldMap = {
@@ -638,7 +655,7 @@ function getDayViewData(phase, param) {
     };
     const field = fieldMap[param] || 'Voltage';
     const phaseRec = dayFirebaseData[phase] || {};
-    
+
     const targetDateObj = chartTargetDate ? new Date(chartTargetDate + 'T00:00:00') : new Date();
     const daysArr = [];
     for (let i = 6; i >= 0; i--) {
@@ -646,7 +663,7 @@ function getDayViewData(phase, param) {
         d.setDate(d.getDate() - i);
         daysArr.push(`${d.getFullYear()}-${_p2(d.getMonth() + 1)}-${_p2(d.getDate())}`);
     }
-    
+
     const labels = [], values = [];
     daysArr.forEach(dateKey => {
         const [, m, dStr] = dateKey.split('-');
@@ -713,11 +730,22 @@ function updateDisplayCards(data) {
     if (DOM.lastUpdate) {
         DOM.lastUpdate.textContent = 'Last update: ' + new Date().toLocaleTimeString('id-ID')
             + (selectedPhase ? ` · ${selectedPhase}` : '');
+        DOM.lastUpdate.classList.add('online');
+        DOM.lastUpdate.classList.remove('offline');
     }
 }
-function updateDisplayCardsBlank() {
+function updateDisplayCardsBlank(state = 'offline') {
     CARD_IDS.forEach(id => { const el = $(id); if (el) el.textContent = '---'; });
-    if (DOM.lastUpdate) DOM.lastUpdate.textContent = '--- Device offline ---';
+    if (DOM.lastUpdate) {
+        DOM.lastUpdate.classList.remove('online', 'offline', 'connecting');
+        if (state === 'connecting') {
+            DOM.lastUpdate.textContent = 'Waiting for data...';
+            DOM.lastUpdate.classList.add('connecting');
+        } else {
+            DOM.lastUpdate.textContent = 'Device offline';
+            DOM.lastUpdate.classList.add('offline');
+        }
+    }
 }
 const PARAM_INFO = {
     voltage: { label: 'Voltage', unit: 'V', color: '#FFA500', border: '#FF8C00' },
@@ -751,7 +779,7 @@ function updateDateNavigatorUI() {
     hiddenDate.value = chartTargetDate;
 
     const targetDateObj = new Date(chartTargetDate + 'T00:00:00');
-    
+
     if (timeFilter === 'day') {
         const d = String(targetDateObj.getDate()).padStart(2, '0');
         const m = String(targetDateObj.getMonth() + 1).padStart(2, '0');
@@ -782,7 +810,7 @@ function onHiddenDateChange() {
     if (!hiddenDate || !hiddenDate.value) return;
     chartTargetDate = hiddenDate.value;
     updateDateNavigatorUI();
-    
+
     if (timeFilter === 'day' && selectedDeviceId) _attachHourlyListener(selectedDeviceId);
     if (timeFilter === 'week' && selectedDeviceId && realtimeChart) _refreshWeekChartFromFirebase();
 }
@@ -790,26 +818,26 @@ function onHiddenDateChange() {
 function shiftChartDate(daysDirection) {
     if (!chartTargetDate) return;
     const targetDateObj = new Date(chartTargetDate + 'T00:00:00');
-    
+
     let shiftAmount = daysDirection;
     if (timeFilter === 'week') {
         shiftAmount = daysDirection * 7;
     }
-    
+
     targetDateObj.setDate(targetDateObj.getDate() + shiftAmount);
-    
+
     const todayDate = new Date();
-    todayDate.setHours(0,0,0,0);
+    todayDate.setHours(0, 0, 0, 0);
     if (targetDateObj > todayDate) return;
-    
+
     const minDate = new Date();
     minDate.setDate(todayDate.getDate() - 30);
-    minDate.setHours(0,0,0,0);
+    minDate.setHours(0, 0, 0, 0);
     if (targetDateObj < minDate) return;
-    
+
     chartTargetDate = targetDateObj.toLocaleDateString('en-CA');
     updateDateNavigatorUI();
-    
+
     if (timeFilter === 'day' && selectedDeviceId) _attachHourlyListener(selectedDeviceId);
     if (timeFilter === 'week' && selectedDeviceId && realtimeChart) _refreshWeekChartFromFirebase();
 }
@@ -817,9 +845,18 @@ function shiftChartDate(daysDirection) {
 function setTimeFilter(filter) {
     if (timeFilter === filter) return;
     timeFilter = filter;
-    
+
+    const canvas = document.getElementById('realtimeChart');
+    if (canvas) {
+        canvas.style.transition = 'none';
+        canvas.style.opacity = '0';
+        _showChartSpinner();
+        void canvas.offsetWidth;
+        canvas.style.transition = 'opacity 0.25s ease';
+    }
+
     updateDateNavigatorUI();
-    
+
     _userIsZoomed = false;
     _visiblePoints = filter === 'day' ? 24 : (filter === 'week' ? 7 : 300);
     document.querySelectorAll('.time-filter-btn').forEach(btn => {
@@ -831,8 +868,8 @@ function setTimeFilter(filter) {
     _lastChartDay = now.getDate();
     if (filter === 'day' && selectedDeviceId) _attachHourlyListener(selectedDeviceId);
     if (filter === 'week' && selectedDeviceId) _attachDayListener(selectedDeviceId);
-    
-    _rebuildChart(true);
+
+    _rebuildChart(false);
 }
 function _startAggRebuild() {
     if (_aggRebuildId) { clearInterval(_aggRebuildId); _aggRebuildId = null; }
@@ -1224,8 +1261,18 @@ function _chartPush() {
     _rafDirty = true;
     if (_pageVisible && timeFilter === 'all') _scheduleRender();
 }
-function _chartInit(deviceId) {
+async function _chartInit(deviceId) {
     if (_chartTimer) { clearInterval(_chartTimer); _chartTimer = null; }
+
+    const canvas = document.getElementById('realtimeChart');
+    if (canvas) {
+        canvas.style.transition = 'none';
+        canvas.style.opacity = '0';
+        _showChartSpinner();
+        void canvas.offsetWidth;
+        canvas.style.transition = 'opacity 0.25s ease';
+    }
+
     resetChartData();
     const now = Date.now();
     let phases = _getEnabledPhaseKeys();
@@ -1234,14 +1281,44 @@ function _chartInit(deviceId) {
         phases = (dev?.phases || []).filter(p => p.enabled !== false).map(p => p.phase);
     }
     if (!phases.length) phases = ['L1'];
-    for (let ts = now - _visiblePoints * CHART_INTERVAL_MS; ts <= now; ts += CHART_INTERVAL_MS) {
-        const point = { ts };
-        phases.forEach(ph => { point[ph] = _chartZeroPoint(); });
-        _appendChartPoint(point);
+
+    try {
+        const snap = await database.ref(`devices/${deviceId}/Live5Min`).once('value');
+        const liveData = snap.val() || {};
+        const keys = Object.keys(liveData).sort((a, b) => parseInt(a) - parseInt(b));
+
+        const interval = typeof CHART_INTERVAL_MS !== 'undefined' ? CHART_INTERVAL_MS : 1000;
+        const start = now - (_visiblePoints * interval);
+
+        let kIdx = 0;
+        for (let ts = start; ts <= now; ts += interval) {
+            const point = { ts };
+            while (kIdx < keys.length - 1 && parseInt(keys[kIdx + 1]) <= ts) {
+                kIdx++;
+            }
+
+            const curK = keys[kIdx];
+            const tsCurK = curK ? parseInt(curK) : 0;
+            const rawAtCur = (curK && tsCurK <= ts) ? liveData[curK] : null;
+
+            phases.forEach(ph => {
+                point[ph] = rawAtCur && rawAtCur[ph] ? rawAtCur[ph] : _chartZeroPoint();
+            });
+            _appendChartPoint(point);
+        }
+    } catch (e) {
+        const interval = typeof CHART_INTERVAL_MS !== 'undefined' ? CHART_INTERVAL_MS : 1000;
+        for (let ts = now - _visiblePoints * interval; ts <= now; ts += interval) {
+            const point = { ts };
+            phases.forEach(ph => { point[ph] = _chartZeroPoint(); });
+            _appendChartPoint(point);
+        }
     }
+
     rebuildCascadeFromRaw();
     _rebuildChart();
-    _chartTimer = setInterval(() => { if (selectedDeviceId === deviceId) _chartPush(); }, CHART_INTERVAL_MS);
+    _fadeChartIn();
+    _chartTimer = setInterval(() => { if (selectedDeviceId === deviceId) _chartPush(); }, typeof CHART_INTERVAL_MS !== 'undefined' ? CHART_INTERVAL_MS : 1000);
 }
 function _rebuildRawFromPoint(point) {
     if (!point) return null;
@@ -1293,7 +1370,7 @@ function _switchParameter(param) {
     document.querySelectorAll('.metric-card-compact').forEach(card => {
         card.classList.toggle('card-active', card.dataset.param === param);
     });
-    _rebuildChart(true);
+    _rebuildChart(false);
 }
 function _morphChartStructure(animate = true) {
     if (!realtimeChart) { initChart(); return; }
@@ -1372,7 +1449,7 @@ async function loadDevices() {
         _deviceListCache = devices;
         const visible = devices;
         if (!visible.length) return;
-        
+
         const initialLoad = !selectedDeviceId;
         if (initialLoad) {
             selectedDeviceId = visible[0].id;
@@ -1406,12 +1483,13 @@ async function loadDevices() {
     } catch (e) { }
 }
 function _populateDeviceSelect(devices) {
-    const sel = DOM.deviceSelect;
-    if (!sel) return;
-    const currentVal = sel.value || selectedDeviceId;
-    sel.innerHTML = devices.map(d =>
+    const selects = [DOM.deviceSelect, DOM.summaryDeviceSelect].filter(Boolean);
+    if (!selects.length) return;
+    const currentVal = DOM.deviceSelect?.value || DOM.summaryDeviceSelect?.value || selectedDeviceId;
+    const html = devices.map(d =>
         `<option value="${d.id}"${d.id === currentVal ? ' selected' : ''}>${d.name || d.id}</option>`
     ).join('');
+    selects.forEach(sel => sel.innerHTML = html);
 }
 function renderDeviceList(devices) {
     const container = DOM.deviceList;
@@ -1519,8 +1597,9 @@ async function saveDeviceName(deviceId) {
     if (label) label.textContent = newName;
     if (deviceId === selectedDeviceId) {
         selectedDeviceName = newName;
-        const sel = DOM.deviceSelect;
-        if (sel) Array.from(sel.options).forEach(opt => { if (opt.value === deviceId) opt.text = newName; });
+        [DOM.deviceSelect, DOM.summaryDeviceSelect].forEach(sel => {
+            if (sel) Array.from(sel.options).forEach(opt => { if (opt.value === deviceId) opt.text = newName; });
+        });
     }
     _renamingDeviceId = null;
     cancelRenameDevice(deviceId);
@@ -1541,8 +1620,9 @@ async function saveDeviceName(deviceId) {
         if (label) label.textContent = oldName;
         if (deviceId === selectedDeviceId) {
             selectedDeviceName = oldName;
-            const sel = DOM.deviceSelect;
-            if (sel) Array.from(sel.options).forEach(opt => { if (opt.value === deviceId) opt.text = oldName; });
+            [DOM.deviceSelect, DOM.summaryDeviceSelect].forEach(sel => {
+                if (sel) Array.from(sel.options).forEach(opt => { if (opt.value === deviceId) opt.text = oldName; });
+            });
         }
         closeModal();
         await showModal('Error', e.name === 'AbortError' ? 'Request timeout (8s) - Periksa koneksi internet' : 'Gagal menyimpan: ' + e.message, 'error');
@@ -1550,6 +1630,9 @@ async function saveDeviceName(deviceId) {
 }
 async function onDeviceChange(deviceId) {
     if (!deviceId || deviceId === selectedDeviceId) return;
+    [DOM.deviceSelect, DOM.summaryDeviceSelect].forEach(sel => {
+        if (sel && sel.value !== deviceId) sel.value = deviceId;
+    });
     if (_prevDeviceId) {
         database.ref(`devices/${_prevDeviceId}/RealTime`).off();
         database.ref(`devices/${_prevDeviceId}/History`).off();
@@ -1569,9 +1652,19 @@ async function onDeviceChange(deviceId) {
     updatePhaseSelector([]);
     resetChartData();
     rawRealtimeData = null;
+
+    const canvas = document.getElementById('realtimeChart');
+    if (canvas) {
+        canvas.style.transition = 'none';
+        canvas.style.opacity = '0';
+        _showChartSpinner();
+        void canvas.offsetWidth;
+        canvas.style.transition = 'opacity 0.3s ease';
+    }
+
     initChart();
     updateConnectionStatus('connecting');
-    updateDisplayCardsBlank();
+    updateDisplayCardsBlank('connecting');
     lastDataTimestamp = 0;
     historyData = []; recordsBySession = {}; sessionsData = {};
     buildSessionUI();
@@ -1731,7 +1824,7 @@ function updateConnectionStatus(connected) {
 }
 function checkDataFreshness() {
     const age = Date.now() - lastDataTimestamp;
-    if (isConnected && (lastDataTimestamp === 0 || age > 3000)) {
+    if (isConnected && (lastDataTimestamp === 0 || age > 8000)) {
         isConnected = false; realtimeData = null; rawRealtimeData = null;
         updateConnectionStatus(false);
     }
@@ -2391,14 +2484,14 @@ async function confirmChangeTime() {
         closeChangeTimeModal();
         return;
     }
-    
+
     const formatRegex = /^\d{2}:\d{2}:\d{2} \d{2}\/\d{2}\/\d{4}$/;
     if (!formatRegex.test(newTimeStr)) {
         closeChangeTimeModal();
         showModal('Format Tidak Valid', 'Mohon masukkan waktu sesuai format:\nHH:MM:SS DD/MM/YYYY\nContoh: 14:30:00 08/04/2026', 'warning');
         return;
     }
-    
+
     const oldDate = parseTimestamp(oldTimeStr);
     const newDate = parseTimestamp(newTimeStr);
     if (isNaN(oldDate.getTime()) || isNaN(newDate.getTime())) {
@@ -2406,13 +2499,13 @@ async function confirmChangeTime() {
         showModal('Error', 'Format waktu tidak valid! Gunakan: HH:MM:SS DD/MM/YYYY', 'warning');
         return;
     }
-    
+
     const deltaMs = newDate.getTime() - oldDate.getTime();
-    
+
     try {
         closeChangeTimeModal();
         showGlobalLoader();
-        
+
         let snap;
         for (let i = 0; i < 15; i++) {
             snap = await database.ref(`devices/${selectedDeviceId}/History`).get();
@@ -2428,7 +2521,7 @@ async function confirmChangeTime() {
             if (hasRecord) break;
             await new Promise(r => setTimeout(r, 600));
         }
-        
+
         let oldestRecTs = Infinity;
         if (snap && snap.exists()) {
             snap.forEach(phaseSnap => {
@@ -2449,10 +2542,10 @@ async function confirmChangeTime() {
                 }
             });
         }
-        
+
         if (oldestRecTs === Infinity) oldestRecTs = oldDate.getTime();
         const deltaMs = newDate.getTime() - oldestRecTs;
-        
+
         let shiftEpoch = Infinity;
         try {
             const res = await fetch('/api/capture/shift_time', {
@@ -2461,18 +2554,18 @@ async function confirmChangeTime() {
                 body: JSON.stringify({ sessionId, deltaMs })
             }).then(r => r.json());
             if (res && res.shift_epoch) shiftEpoch = res.shift_epoch * 1000;
-        } catch(err) { console.error('Failed to shift backend time', err); }
-        
+        } catch (err) { console.error('Failed to shift backend time', err); }
+
         await new Promise(r => setTimeout(r, 3500));
-        
+
         let updates = {};
         const p2 = v => String(v).padStart(2, '0');
         const serializeTs = (date) => `${p2(date.getHours())}:${p2(date.getMinutes())}:${p2(date.getSeconds())} ${p2(date.getDate())}/${p2(date.getMonth() + 1)}/${date.getFullYear()}`;
         const newStartTime = serializeTs(newDate);
-        
+
         const finalSnap = await database.ref(`devices/${selectedDeviceId}/History`).get();
         let latestRecTs = 0;
-        
+
         if (finalSnap && finalSnap.exists()) {
             finalSnap.forEach(phaseSnap => {
                 const ph = phaseSnap.key;
@@ -2483,19 +2576,19 @@ async function confirmChangeTime() {
                         if (recSnap.key === '_meta') return;
                         const rec = recSnap.val();
                         if (!rec.timestamp) return;
-                        
+
                         const schedTsStr = recSnap.key.replace('capture_', '');
                         const schedTs = parseInt(schedTsStr);
                         const recDate = parseTimestamp(rec.timestamp).getTime();
                         if (isNaN(recDate)) return;
-                        
+
                         const isAlreadyShifted = (!isNaN(schedTs) && schedTs >= shiftEpoch);
                         const finalTs = isAlreadyShifted ? recDate : recDate + deltaMs;
                         if (finalTs > latestRecTs) latestRecTs = finalTs;
                     });
                 }
             });
-            
+
             finalSnap.forEach(phaseSnap => {
                 const ph = phaseSnap.key;
                 if (!/^L\d+$/.test(ph)) return;
@@ -2509,13 +2602,13 @@ async function confirmChangeTime() {
                     if (meta.endTime && meta.endTime !== '---' && latestRecTs > 0) {
                         updates[`devices/${selectedDeviceId}/History/${ph}/${sessionId}/_meta/endTime`] = serializeTs(new Date(latestRecTs));
                     }
-                    
+
                     sessSnap.forEach(recSnap => {
                         if (recSnap.key === '_meta') return;
                         const schedTsStr = recSnap.key.replace('capture_', '');
                         const schedTs = parseInt(schedTsStr);
                         if (!isNaN(schedTs) && schedTs >= shiftEpoch) return;
-                        
+
                         const rec = recSnap.val();
                         if (!rec.timestamp) return;
                         const recDate = parseTimestamp(rec.timestamp);
@@ -2526,16 +2619,16 @@ async function confirmChangeTime() {
                 }
             });
         }
-        
+
         if (Object.keys(updates).length > 0) {
             await database.ref().update(updates);
         }
-        
+
         hideGlobalLoader();
         showModal('Sukses', 'Waktu sesi berhasil diubah dan disinkronkan.', 'success');
         buildSessionUI();
-        
-    } catch(e) {
+
+    } catch (e) {
         hideGlobalLoader();
         showModal('Error', 'Gagal mengubah waktu! Error: ' + e.message, 'error');
     }
@@ -2579,6 +2672,7 @@ async function setCaptureInterval() {
     await showModal('Interval Diperbarui', `Interval diubah menjadi ${val} ${unitLabel}.`, 'success');
 }
 document.addEventListener('DOMContentLoaded', async () => {
+    updateDateNavigatorUI();
     initChart();
     DOM.paramSelect?.addEventListener('change', changeParameter);
     document.querySelectorAll('.metric-card-compact[data-param]').forEach(card => {
