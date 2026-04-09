@@ -90,7 +90,8 @@ function _doRender() {
         _rebuildChart();
         return;
     }
-    const { yMin, yMax } = getYBoundsMulti(slicedDatasets, selectedParameter);
+    // Use actual chart datasets (has hidden state, real data values) for Y bounds
+    const { yMin, yMax } = getYBoundsMulti(realtimeChart.data.datasets, selectedParameter);
     realtimeChart.options.scales.y.min = yMin;
     realtimeChart.options.scales.y.max = yMax;
     realtimeChart.update('none');
@@ -1021,14 +1022,21 @@ function getYBoundsMulti(datasets, param) {
     const pad = padMap[param] ?? 2;
     const allValues = datasets.filter(ds => !ds.hidden).flatMap(ds => ds.data).filter(v => v != null && isFinite(v));
     if (!allValues.length) return { yMin: 0, yMax: pad * 2 };
-    const dataMin = Math.min(...allValues), dataMax = Math.max(...allValues);
-    const spread = dataMax - 0;
+    // Use non-zero values for max to avoid being dominated by zero-filled history
+    const nonZeroValues = allValues.filter(v => v > 0);
+    const dataMax = nonZeroValues.length > 0 ? Math.max(...nonZeroValues) : Math.max(...allValues);
+    const spread = dataMax;
     const actualPad = spread < pad ? pad : spread * 0.08;
     return { yMin: 0, yMax: parseFloat((dataMax + actualPad).toFixed(4)) };
 }
 function initChart() {
     const ctx = $('realtimeChart');
     if (!ctx) return;
+    // Always destroy any existing chart to prevent orphaned Chart.js canvas contexts
+    if (realtimeChart) {
+        try { realtimeChart.destroy(); } catch (_) { }
+        realtimeChart = null;
+    }
     const info = PARAM_INFO[selectedParameter];
     const isBar = timeFilter === 'week';
     const now = new Date();
@@ -1302,6 +1310,16 @@ async function _chartInit(deviceId) {
         const liveData = snap.val() || {};
         const keys = Object.keys(liveData).sort((a, b) => parseInt(a) - parseInt(b));
 
+        // Merge phases from the snapshot itself so L2/L3 get the same history as L1
+        keys.forEach(k => {
+            if (liveData[k] && typeof liveData[k] === 'object') {
+                Object.keys(liveData[k]).forEach(ph => {
+                    if (/^L\d+$/.test(ph) && !phases.includes(ph)) phases.push(ph);
+                });
+            }
+        });
+        phases.sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+
         const interval = typeof CHART_INTERVAL_MS !== 'undefined' ? CHART_INTERVAL_MS : 1000;
         const start = now - (_visiblePoints * interval);
 
@@ -1383,7 +1401,7 @@ function _switchParameter(param) {
     if (!param) return;
     selectedParameter = param;
     _userIsZoomed = false;
-    _visiblePoints = timeFilter === 'day' ? 24 : (timeFilter === 'week' ? 7 : 150);
+    _visiblePoints = timeFilter === 'day' ? 24 : (timeFilter === 'week' ? 7 : 300);
     if (DOM.paramSelect) DOM.paramSelect.value = param;
     document.querySelectorAll('.metric-card-compact').forEach(card => {
         card.classList.toggle('card-active', card.dataset.param === param);
