@@ -173,6 +173,9 @@ def _hourly_worker() -> None:
 threading.Thread(target=_hourly_worker, daemon=True).start()
 
 _device_live_hash = {}
+_device_last_change_ms = {}
+_device_is_offline = {}
+
 def _live_5min_worker() -> None:
     time.sleep(2)
     _cleanup_counter = 0
@@ -187,9 +190,17 @@ def _live_5min_worker() -> None:
                 if not raw or not isinstance(raw, dict): continue
                 
                 h = _data_hash(raw)
-                if _device_live_hash.get(did) == h: continue
-                _device_live_hash[did] = h
-                fb_put(f'devices/{did}/Live5Min/{now_ms}', raw)
+                if _device_live_hash.get(did) != h:
+                    _device_live_hash[did] = h
+                    _device_last_change_ms[did] = now_ms
+                    _device_is_offline[did] = False
+                    fb_put(f'devices/{did}/Live5Min/{now_ms}', raw)
+                else:
+                    last_ms = _device_last_change_ms.get(did, now_ms)
+                    if now_ms - last_ms > 15000:
+                        if not _device_is_offline.get(did, False):
+                            _device_is_offline[did] = True
+                            fb_put(f'devices/{did}/Live5Min/{now_ms}', {"offline": True})
                 
             _cleanup_counter += 1
             if _cleanup_counter >= 15:

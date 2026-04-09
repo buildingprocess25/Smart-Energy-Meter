@@ -93,8 +93,7 @@ function _doRender() {
     const { yMin, yMax } = getYBoundsMulti(slicedDatasets, selectedParameter);
     realtimeChart.options.scales.y.min = yMin;
     realtimeChart.options.scales.y.max = yMax;
-    if (timeFilter === 'all') realtimeChart.update();
-    else realtimeChart.update('none');
+    realtimeChart.update('none');
 }
 let _rebuildTimer = null;
 let _chartEntryAnimate = false;
@@ -297,12 +296,15 @@ function _detectPhaseKeys(raw) {
 }
 function _getEnabledPhaseKeys() {
     const dev = _deviceListCache.find(d => d.id === selectedDeviceId);
-    if (!dev?.phases?.length) {
-        return Object.keys(phaseChartData).filter(k => /^L\d+$/.test(k));
+    if (dev && dev.phases && dev.phases.length > 0) {
+        return dev.phases
+            .filter(p => p.enabled !== false)
+            .map(p => p.phase);
     }
-    return dev.phases
-        .filter(p => p.enabled !== false)
-        .map(p => p.phase);
+    // Fallback: search phaseChartData or just return L1 if everything is missing
+    const keys = Object.keys(phaseChartData).filter(k => /^L\d+$/.test(k));
+    if (keys.length > 0) return keys;
+    return ['L1'];
 }
 function normalizeFirebaseData(raw) {
     if (!raw) return null;
@@ -991,7 +993,7 @@ function getAllPhaseDatasets() {
             borderWidth: isDayLine ? 2 : (isBar ? 0 : 2.5),
             tension: isDayLine ? 0.4 : 0.38,
             cubicInterpolationMode: 'monotone',
-            spanGaps: !isBar,
+            spanGaps: false,
             fill: !isBar,
             pointRadius: isDayLine ? 0 : 0,
             pointHoverRadius: isDayLine ? 5 : 0,
@@ -1000,7 +1002,14 @@ function getAllPhaseDatasets() {
             pointBorderWidth: isDayLine ? 2 : 0,
             borderRadius: isBar ? [6, 6, 0, 0] : 0,
             borderSkipped: false,
-            ...(isBar ? { barPercentage: 0.55, categoryPercentage: 0.7 } : {}),
+            ...(isBar ? { 
+                type: 'bar',
+                barPercentage: 0.55, 
+                categoryPercentage: 0.7,
+                grouped: true 
+            } : {
+                type: 'line'
+            }),
             _phaseKey: phase,
             hidden: typeof _hiddenPhases !== 'undefined' ? _hiddenPhases.has(phase) : false,
         };
@@ -1011,11 +1020,11 @@ function getYBoundsMulti(datasets, param) {
     const padMap = { voltage: 3, current: 0.2, power: 10, frequency: 0.2, energy: 0.05, powerFactor: 0.02 };
     const pad = padMap[param] ?? 2;
     const allValues = datasets.filter(ds => !ds.hidden).flatMap(ds => ds.data).filter(v => v != null && isFinite(v));
-    if (!allValues.length) return { yMin: undefined, yMax: undefined };
+    if (!allValues.length) return { yMin: 0, yMax: pad * 2 };
     const dataMin = Math.min(...allValues), dataMax = Math.max(...allValues);
-    const spread = dataMax - dataMin;
+    const spread = dataMax - 0;
     const actualPad = spread < pad ? pad : spread * 0.08;
-    return { yMin: parseFloat((dataMin - actualPad).toFixed(4)), yMax: parseFloat((dataMax + actualPad).toFixed(4)) };
+    return { yMin: 0, yMax: parseFloat((dataMax + actualPad).toFixed(4)) };
 }
 function initChart() {
     const ctx = $('realtimeChart');
@@ -1056,7 +1065,7 @@ function initChart() {
                 borderWidth: 2.5,
                 tension: 0.38,
                 cubicInterpolationMode: 'monotone',
-                spanGaps: true,
+                spanGaps: false,
                 fill: true,
                 pointRadius: 0,
                 pointHoverRadius: 0,
@@ -1077,12 +1086,24 @@ function initChart() {
             responsive: true,
             maintainAspectRatio: false,
             interaction: { intersect: false, mode: 'index' },
-            animation: timeFilter === 'all' ? {
+            animation: _chartEntryAnimate ? {
                 duration: 800,
-                easing: 'linear'
+                easing: 'easeOutQuint',
+                onComplete({ chart }) {
+                    if (timeFilter === 'all') {
+                        chart.options.animation = false;
+                        chart.options.animations = {};
+                    }
+                },
             } : false,
-            animations: timeFilter === 'all' ? {
-                y: { duration: 400, easing: 'easeOutQuad' }
+            animations: _chartEntryAnimate ? {
+                y: {
+                    duration: 800,
+                    easing: 'easeOutQuint',
+                    from(ctx) {
+                        return ctx.chart.scales?.y?.getPixelForValue(0) ?? 0;
+                    },
+                },
             } : {},
             layout: { padding: { top: 8, right: 16, bottom: 2, left: 4 } },
             plugins: {
@@ -1332,7 +1353,10 @@ function _appendChartPoint(point) {
     });
     chartLabels.push(label);
     chartTimestamps.push(ts);
-    const fv = (pd, k) => { try { return parseFloat(pd[k] || 0) || 0; } catch (_) { return 0; } };
+    const fv = (pd, k) => {
+        if (pd[k] == null) return null;
+        try { return parseFloat(pd[k]) || 0; } catch (_) { return 0; }
+    };
     phases.forEach(phase => {
         if (!phaseChartData[phase]) {
             phaseChartData[phase] = Object.fromEntries(PARAM_KEYS.map(k => [k, []]));
@@ -1396,7 +1420,7 @@ function _morphChartStructure(animate = true) {
                 borderWidth: 2.5,
                 tension: 0.38,
                 cubicInterpolationMode: 'monotone',
-                spanGaps: true,
+                spanGaps: false,
                 fill: true,
                 pointRadius: 0,
                 pointHoverRadius: 0,
@@ -1411,6 +1435,21 @@ function _morphChartStructure(animate = true) {
     const { yMin, yMax } = getYBoundsMulti(realtimeChart.data.datasets, selectedParameter);
     realtimeChart.options.scales.y.min = yMin;
     realtimeChart.options.scales.y.max = yMax;
+    
+    // Update Y-axis title
+    const info = PARAM_INFO[selectedParameter];
+    if (info && realtimeChart.options.scales.y.title) {
+        realtimeChart.options.scales.y.title.text = info.unit ? `${info.label} (${info.unit})` : info.label;
+    }
+
+    // Ensure grouping/stacking is correctly applied during transition
+    if (realtimeChart.options.scales.x) {
+        realtimeChart.options.scales.x.stacked = false;
+        realtimeChart.options.scales.x.offset = isBar;
+    }
+    if (realtimeChart.options.scales.y) {
+        realtimeChart.options.scales.y.stacked = false;
+    }
     if (animate) {
         realtimeChart.options.animation = { duration: 750, easing: 'easeOutQuart' };
     } else {
