@@ -93,7 +93,8 @@ function _doRender() {
     const { yMin, yMax } = getYBoundsMulti(slicedDatasets, selectedParameter);
     realtimeChart.options.scales.y.min = yMin;
     realtimeChart.options.scales.y.max = yMax;
-    realtimeChart.update('none');
+    if (timeFilter === 'all') realtimeChart.update();
+    else realtimeChart.update('none');
 }
 let _rebuildTimer = null;
 let _chartEntryAnimate = false;
@@ -383,6 +384,7 @@ function updatePhaseSelector(phases) {
             : p;
         return `<button class="phase-btn${selectedPhase === p ? ' active' : ''}" data-phase="${p}" onclick="setPhase('${p}')">${label}</button>`;
     }).join('');
+    if (typeof renderPhaseToggles === 'function') renderPhaseToggles();
 }
 const _p2 = v => String(v).padStart(2, '0');
 function _minKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth() + 1)}-${_p2(d.getDate())}T${_p2(d.getHours())}:${_p2(d.getMinutes())}`; }
@@ -999,6 +1001,8 @@ function getAllPhaseDatasets() {
             borderRadius: isBar ? [6, 6, 0, 0] : 0,
             borderSkipped: false,
             ...(isBar ? { barPercentage: 0.55, categoryPercentage: 0.7 } : {}),
+            _phaseKey: phase,
+            hidden: typeof _hiddenPhases !== 'undefined' ? _hiddenPhases.has(phase) : false,
         };
     });
     return { labels, datasets };
@@ -1006,7 +1010,7 @@ function getAllPhaseDatasets() {
 function getYBoundsMulti(datasets, param) {
     const padMap = { voltage: 3, current: 0.2, power: 10, frequency: 0.2, energy: 0.05, powerFactor: 0.02 };
     const pad = padMap[param] ?? 2;
-    const allValues = datasets.flatMap(ds => ds.data).filter(v => v != null && isFinite(v));
+    const allValues = datasets.filter(ds => !ds.hidden).flatMap(ds => ds.data).filter(v => v != null && isFinite(v));
     if (!allValues.length) return { yMin: undefined, yMax: undefined };
     const dataMin = Math.min(...allValues), dataMax = Math.max(...allValues);
     const spread = dataMax - dataMin;
@@ -1021,7 +1025,7 @@ function initChart() {
     const now = new Date();
     const xTitles = {
         all: '',
-        day: `Hari ini — ${now.toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })} (Hourly)`,
+        day: `Hari ini — ${now.toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}`,
         week: '7 Hari Terakhir',
     };
     const unitLabel = info.unit ? `${info.label} (${info.unit})` : info.label;
@@ -1040,6 +1044,7 @@ function initChart() {
             else if (values.length < total) values = [...Array(total - values.length).fill(0), ...values];
             values = values.slice(start);
             return {
+                _phaseKey: phase,
                 label: getPhaseLabel(phase),
                 data: values,
                 borderColor: colors.line,
@@ -1055,6 +1060,7 @@ function initChart() {
                 fill: true,
                 pointRadius: 0,
                 pointHoverRadius: 0,
+                hidden: typeof _hiddenPhases !== 'undefined' ? _hiddenPhases.has(phase) : false,
             };
         });
     } else {
@@ -1071,29 +1077,17 @@ function initChart() {
             responsive: true,
             maintainAspectRatio: false,
             interaction: { intersect: false, mode: 'index' },
-            animation: _chartEntryAnimate ? {
+            animation: timeFilter === 'all' ? {
                 duration: 800,
-                easing: 'easeOutQuint',
-                onComplete({ chart }) {
-                    if (timeFilter === 'all') {
-                        chart.options.animation = false;
-                        chart.options.animations = {};
-                    }
-                },
+                easing: 'linear'
             } : false,
-            animations: _chartEntryAnimate ? {
-                y: {
-                    duration: 800,
-                    easing: 'easeOutQuint',
-                    from(ctx) {
-                        return ctx.chart.scales?.y?.getPixelForValue(0) ?? 0;
-                    },
-                },
+            animations: timeFilter === 'all' ? {
+                y: { duration: 400, easing: 'easeOutQuad' }
             } : {},
             layout: { padding: { top: 8, right: 16, bottom: 2, left: 4 } },
             plugins: {
                 legend: {
-                    display: true,
+                    display: false,
                     position: 'top',
                     align: 'start',
                     labels: {
@@ -1390,6 +1384,7 @@ function _morphChartStructure(animate = true) {
             else if (values.length < total) values = [...Array(total - values.length).fill(0), ...values];
             values = values.slice(start);
             return {
+                _phaseKey: phase,
                 label: getPhaseLabel(phase),
                 data: values,
                 borderColor: colors.line,
@@ -1405,6 +1400,7 @@ function _morphChartStructure(animate = true) {
                 fill: true,
                 pointRadius: 0,
                 pointHoverRadius: 0,
+                hidden: typeof _hiddenPhases !== 'undefined' ? _hiddenPhases.has(phase) : false,
             };
         });
     } else {
@@ -1628,6 +1624,55 @@ async function saveDeviceName(deviceId) {
         await showModal('Error', e.name === 'AbortError' ? 'Request timeout (8s) - Periksa koneksi internet' : 'Gagal menyimpan: ' + e.message, 'error');
     }
 }
+
+let _hiddenPhases = new Set();
+function toggleChartPhase(phase) {
+    if (_hiddenPhases.has(phase)) _hiddenPhases.delete(phase);
+    else _hiddenPhases.add(phase);
+    renderPhaseToggles();
+    
+    if (realtimeChart && realtimeChart.data && realtimeChart.data.datasets) {
+        realtimeChart.data.datasets.forEach(ds => {
+            if (ds._phaseKey === phase) {
+                ds.hidden = _hiddenPhases.has(phase);
+            }
+        });
+        const { yMin, yMax } = getYBoundsMulti(realtimeChart.data.datasets, selectedParameter);
+        realtimeChart.options.scales.y.min = yMin;
+        realtimeChart.options.scales.y.max = yMax;
+        realtimeChart.update('none');
+    }
+}
+function renderPhaseToggles() {
+    const container = document.getElementById('chartPhaseToggles');
+    if (!container) return;
+    const phases = _getEnabledPhaseKeys().slice().sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+    if (phases.length <= 1) {
+        container.style.display = 'none';
+        return;
+    }
+    container.style.display = 'flex';
+    container.innerHTML = '';
+    phases.forEach(ph => {
+        const isActive = !_hiddenPhases.has(ph);
+        const colors = getPhaseColors(ph);
+        
+        const btn = document.createElement('button');
+        btn.className = 'phase-toggle-btn' + (isActive ? ' active' : '');
+        btn.onclick = () => toggleChartPhase(ph);
+        
+        const dot = document.createElement('span');
+        dot.className = 'phase-toggle-dot';
+        dot.style.background = colors.border || colors.line;
+        
+        const txt = document.createTextNode(' ' + getPhaseLabel(ph));
+        
+        btn.appendChild(dot);
+        btn.appendChild(txt);
+        container.appendChild(btn);
+    });
+}
+
 async function onDeviceChange(deviceId) {
     if (!deviceId || deviceId === selectedDeviceId) return;
     [DOM.deviceSelect, DOM.summaryDeviceSelect].forEach(sel => {

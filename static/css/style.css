@@ -410,6 +410,22 @@ body {
 .chart-header h3 { font-size: 11px !important; font-weight: 800 !important; color: var(--text-tertiary) !important; letter-spacing: 1.2px !important; text-transform: uppercase !important; font-family: var(--font-ui) !important; align-self: center; }
 .chart-header-right { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 .chart-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.chart-phase-toggles { display: flex; gap: 6px; align-items: center; margin-right: 4px; }
+.phase-toggle-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 10px; border: 1.5px solid var(--border);
+    border-radius: var(--radius-md); background: transparent;
+    color: var(--text-tertiary); font-family: var(--font-ui);
+    font-size: 11.5px; font-weight: 700; cursor: pointer;
+    transition: all 0.2s ease; opacity: 0.5;
+}
+.phase-toggle-btn:hover { opacity: 0.8; }
+.phase-toggle-btn.active {
+    background: var(--surface); color: var(--text-primary);
+    border-color: var(--border); opacity: 1;
+    box-shadow: var(--shadow-sm);
+}
+.phase-toggle-dot { width: 8px; height: 8px; border-radius: 50%; }
 .zoom-hint { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text-tertiary) !important; font-weight: 600; white-space: nowrap; }
 .parameter-select {
     padding: 6px 12px !important;
