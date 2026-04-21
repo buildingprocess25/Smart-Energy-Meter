@@ -1737,7 +1737,7 @@ async function onDeviceChange(deviceId) {
     });
     if (_prevDeviceId) {
         database.ref(`devices/${_prevDeviceId}/RealTime`).off();
-        database.ref(`devices/${_prevDeviceId}/History`).off();
+        if (window._currentHistoryRef) window._currentHistoryRef.off();
         database.ref(`devices/${_prevDeviceId}/meta/name`).off();
         database.ref(`devices/${_prevDeviceId}/meta/sensors`).off();
         database.ref(`devices/${_prevDeviceId}/HourlyCapture`).off();
@@ -1950,30 +1950,18 @@ function clearDbSearch() {
 }
 let historyData = [], recordsBySession = {};
 function _attachHistoryListener(deviceId) {
-    database.ref(`devices/${deviceId}/History`).on('value', snap => {
+    if (window._currentHistoryRef) window._currentHistoryRef.off();
+    window._currentHistoryRef = database.ref(`devices/${deviceId}/Sessions`);
+    window._currentHistoryRef.on('value', snap => {
         historyData = []; recordsBySession = {}; sessionsData = {};
         if (snap.exists()) {
-            snap.forEach(phaseSnap => {
-                const phase = phaseSnap.key;
-                if (!/^L\d+$/.test(phase)) return;
-                phaseSnap.forEach(sessionSnap => {
-                    const sid = sessionSnap.key;
-                    if (!recordsBySession[sid]) recordsBySession[sid] = {};
-                    if (!recordsBySession[sid][phase]) recordsBySession[sid][phase] = [];
-                    sessionSnap.forEach(recordSnap => {
-                        if (recordSnap.key === '_meta') {
-                            const meta = { ...recordSnap.val(), id: sid };
-                            const existing = sessionsData[sid];
-                            if (!existing || (!existing.name && meta.name) || (!existing.startTime && meta.startTime)) {
-                                sessionsData[sid] = meta;
-                            }
-                            return;
-                        }
-                        const record = { ...recordSnap.val(), sessionId: sid, _phase: phase, _key: recordSnap.key };
-                        historyData.push(record);
-                        recordsBySession[sid][phase].push(record);
-                    });
-                });
+            snap.forEach(sessionSnap => {
+                const sid = sessionSnap.key;
+                const meta = sessionSnap.val();
+                if (meta) {
+                    meta.id = sid;
+                    sessionsData[sid] = meta;
+                }
             });
         }
         buildSessionUI();
@@ -2080,9 +2068,6 @@ function buildSessionUI() {
             </button>`;
         if (!isActive) {
             actionBtns += `
-            <button class="session-export-btn" onclick="exportSession('${session.id}','${_escapeAttr(session.name)}',event)" title="Export">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-            </button>
             <button class="session-rename-btn" onclick="openRenameModal('${session.id}','${_escapeAttr(session.name)}',event)" title="Rename">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
             </button>
@@ -2140,7 +2125,7 @@ function buildSessionUI() {
                         + '<td>' + (e.Energy != null ? e.Energy.toFixed(3) : '---') + '</td>'
                         + '<td style="color:' + pfColor + '">' + (e.PowerFactor != null ? e.PowerFactor.toFixed(3) : '---') + '</td>'
                         + '</tr>';
-                }).join('') : '<tr><td colspan="7" class="loading-cell" style="padding:20px !important">Belum ada record</td></tr>'}</tbody>
+                }).join('') : '<tr><td colspan="7" class="loading-cell" style="padding:20px !important">Tampilan riwayat (History) dimatikan untuk perlindungan limit kuota.</td></tr>'}</tbody>
                         </table>`;
             })()}
                 </div>
@@ -2374,6 +2359,7 @@ async function clearRecords() {
     if (!confirmed) return;
     try {
         await database.ref(`devices/${selectedDeviceId}/History`).remove();
+        await database.ref(`devices/${selectedDeviceId}/Sessions`).remove();
         historyData = []; recordsBySession = {}; sessionsData = {};
         buildSessionUI();
         await showModal('Berhasil Dihapus', 'Semua data rekaman telah dihapus.', 'success');
@@ -2759,6 +2745,7 @@ async function deleteSession(sessionId, sessionName, event) {
         } else {
             await database.ref(`devices/${selectedDeviceId}/History/${sessionId}`).remove();
         }
+        await database.ref(`devices/${selectedDeviceId}/Sessions/${sessionId}`).remove();
         delete sessionsData[sessionId]; delete recordsBySession[sessionId];
         historyData = historyData.filter(r => r.sessionId !== sessionId);
         buildSessionUI();
