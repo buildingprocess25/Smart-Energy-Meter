@@ -122,7 +122,7 @@ def _do_hourly_capture_device(device_id: str) -> None:
         for t in ts_list: t.start()
         for t in ts_list: t.join(timeout=8)
         
-        all_hourly_dates = fb_get(f'devices/{device_id}/HourlyCapture') or {}
+        all_hourly_dates = fb_get_shallow(f'devices/{device_id}/HourlyCapture') or {}
         if isinstance(all_hourly_dates, dict):
             old_dates = sorted([k for k in all_hourly_dates.keys() if '-' in k])
             for old_date in old_dates[:-30]:
@@ -146,7 +146,7 @@ def _do_day_capture_device(device_id: str) -> None:
                 'Apparent': avg('Apparent'), 'Reactive': avg('Reactive'), 'Energy': avg('Energy'),
                 'Frequency': avg('Frequency'), 'PowerFactor': avg('PowerFactor'), 'Phase1': avg('Phase1'),
             })
-            all_days = fb_get(f'devices/{device_id}/DayCapture/{ph}') or {}
+            all_days = fb_get_shallow(f'devices/{device_id}/DayCapture/{ph}') or {}
             for old in sorted(all_days)[:-30]:
                 fb_delete(f'devices/{device_id}/DayCapture/{ph}/{old}')
     except Exception: pass
@@ -156,9 +156,9 @@ def _chain_capture_and_day(device_id: str) -> None:
     _do_day_capture_device(device_id)
 def _do_hourly_capture_all() -> None:
     try:
-        for did, dd in (fb_get('devices') or {}).items():
-            if isinstance(dd, dict):
-                threading.Thread(target=_chain_capture_and_day, args=(did,), daemon=True).start()
+        devices_shallow = fb_get_shallow('devices') or {}
+        for did in devices_shallow.keys():
+            threading.Thread(target=_chain_capture_and_day, args=(did,), daemon=True).start()
     except Exception: pass
 def _hourly_worker() -> None:
     INTERVAL = 300
@@ -211,7 +211,7 @@ def _live_5min_worker() -> None:
                     for k in keys_to_delete:
                         fb_delete(f'devices/{did}/Live5Min/{k}')
         except Exception: pass
-        time.sleep(1)
+        time.sleep(3)
 threading.Thread(target=_live_5min_worker, daemon=True).start()
 def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_change, enabled_phases, time_offset_ms):
     try:
@@ -272,13 +272,20 @@ def _finalize_bg(sid, did, count, se, th, enabled_phases, time_offset_ms) -> Non
         if th and th.is_alive(): th.join(timeout=5)
         time.sleep(1.5)
         if sid and did:
-            phases  = enabled_phases or _detect_phases(fb_get(f'devices/{did}') or {})
+            phases = enabled_phases
+            if not phases:
+                phases = _detect_phases({
+                    'RealTime': fb_get_shallow(f'devices/{did}/RealTime'),
+                    'meta': {'sensors': fb_get_shallow(f'devices/{did}/meta/sensors')}
+                })
             ended_ts = time.time() + (time_offset_ms / 1000.0)
             end_time_str = datetime.fromtimestamp(ended_ts, tz=_WIB).strftime('%H:%M:%S %d/%m/%Y')
             payload = {'endTime': end_time_str, 'recordCount': count}
-            ts_list = [threading.Thread(target=fb_patch, args=(f'devices/{did}/History/{ph}/{sid}/_meta', payload), daemon=True) for ph in phases]
-            for t in ts_list: t.start()
-            for t in ts_list: t.join(timeout=8)
+            # Update metadata in History for each phase
+            for ph in phases:
+                fb_patch(f'devices/{did}/History/{ph}/{sid}/_meta', payload)
+            # Also update the centralized Sessions metadata node
+            fb_patch(f'devices/{did}/Sessions/{sid}', payload)
     except Exception: pass
     finally:
         with _capture_lock: _capture_state['_finalizing'] = False
@@ -305,21 +312,45 @@ def get_config(): return jsonify(FIREBASE_CONFIG)
 @app.route('/api/devices')
 def list_devices():
     devices = []
-    for did, dd in (fb_get('devices') or {}).items():
-        if not isinstance(dd, dict): continue
-        meta    = dd.get('meta') or {}
-        sensors = meta.get('sensors') or {}
-        detected = _detect_phases(dd)
-        phases = []
-        for ph in detected:
-            s = sensors.get(ph) or {} if isinstance(sensors, dict) else {}
-            phases.append({'phase': ph, 'name': s.get('name', ph), 'properties': s.get('properties', []), 'enabled': s.get('enabled', True)})
-        devices.append({'id': did, 'name': meta.get('name', did), 'online': meta.get('online', False),
-                        'lastSeen': meta.get('lastSeen', '---'), 'phases': phases, 'phaseCount': len(phases)})
+    try:
+        devices_shallow = fb_get_shallow('devices') or {}
+        for did in devices_shallow.keys():
+            # Only fetch meta node to avoid large data downloads (History, RealTime, etc.)
+            meta = fb_get(f'devices/{did}/meta') or {}
+            sensors = meta.get('sensors') or {}
+            
+            # Use shallow data for phase detection if possible, or fetch just what's needed
+            # For simplicity and correctness, we might still need some data for _detect_phases
+            # but _detect_phases currently looks at RealTime and meta/sensors.
+            # Let's optimize _detect_phases or just fetch RealTime shallowly if needed.
+            # Actually, most of the time we just need the sensors list from meta.
+            detected = []
+            if isinstance(sensors, dict):
+                detected = sorted([k for k in sensors if _PHASE_RE.match(k)], key=lambda x: int(x[1:]))
+            
+            phases = []
+            for ph in detected:
+                s = sensors.get(ph) or {} if isinstance(sensors, dict) else {}
+                phases.append({'phase': ph, 'name': s.get('name', ph), 'properties': s.get('properties', []), 'enabled': s.get('enabled', True)})
+            
+            devices.append({
+                'id': did, 
+                'name': meta.get('name', did), 
+                'online': meta.get('online', False),
+                'lastSeen': meta.get('lastSeen', '---'), 
+                'phases': phases, 
+                'phaseCount': len(phases)
+            })
+    except Exception as e:
+        print(f"Error listing devices: {e}")
+        
     return jsonify(sorted(devices, key=lambda d: d['id']))
 @app.route('/api/devices/<device_id>/init-sensors', methods=['POST'])
 def init_device_sensors(device_id: str):
-    dd = fb_get(f'devices/{device_id}') or {}
+    dd = {
+        'RealTime': fb_get_shallow(f'devices/{device_id}/RealTime'),
+        'meta': {'sensors': fb_get_shallow(f'devices/{device_id}/meta/sensors')}
+    }
     detected = _detect_phases(dd); count = 0
     for ph in detected:
         if fb_get(f'devices/{device_id}/meta/sensors/{ph}') is None:
@@ -413,10 +444,14 @@ def capture_start():
         }
         def _meta_bg():
             try:
-                sensors = ((fb_get(f'devices/{did}') or {}).get('meta') or {}).get('sensors') or {}
+                sensors = fb_get(f'devices/{did}/meta/sensors') or {}
                 meta['phaseNames'] = {ph: (sensors.get(ph) or {}).get('name', ph) for ph in phases}
             except: pass
-            for ph in phases: fb_put(f'devices/{did}/History/{ph}/{sid}/_meta', meta)
+            # Update metadata in History for each phase
+            for ph in phases:
+                fb_put(f'devices/{did}/History/{ph}/{sid}/_meta', meta)
+            # Also update the centralized Sessions metadata node for efficient frontend listing
+            fb_put(f'devices/{did}/Sessions/{sid}', meta)
         threading.Thread(target=_meta_bg, daemon=True).start()
         def _energy_bg():
             try:
