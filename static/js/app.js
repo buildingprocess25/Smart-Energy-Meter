@@ -1306,8 +1306,14 @@ async function _chartInit(deviceId) {
     if (!phases.length) phases = ['L1'];
 
     try {
-        const snap = await database.ref(`devices/${deviceId}/Live5Min`).once('value');
-        const liveData = snap.val() || {};
+        const res = await fetch(`/api/live-buffer/${deviceId}`);
+        const dataList = await res.json();
+        const liveData = {};
+        if (Array.isArray(dataList)) {
+            dataList.forEach(item => {
+                if (item && item.timestamp) liveData[item.timestamp] = item.data;
+            });
+        }
         const keys = Object.keys(liveData).sort((a, b) => parseInt(a) - parseInt(b));
 
         // Merge phases from the snapshot itself so L2/L3 get the same history as L1

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os, re, threading, time, hashlib, json, logging
+from collections import deque
 from datetime import datetime, timedelta, timezone
 import requests as http_requests
 from dotenv import load_dotenv
@@ -25,17 +26,52 @@ def _detect_phases(device_data: dict) -> list[str]:
     for src in [device_data.get('RealTime') or {}, (device_data.get('meta') or {}).get('sensors') or {}]:
         if isinstance(src, dict): keys.update(k for k in src if _PHASE_RE.match(k))
     return sorted(keys, key=lambda x: int(x[1:]))
+_fb_session = http_requests.Session()
+_fb_adapter = http_requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+_fb_session.mount('https://', _fb_adapter)
+_fb_session.mount('http://', _fb_adapter)
+_fb_etags = {}
+_fb_cache = {}
+
 def _fb(method: str, path: str, **kw):
     try:
-        r = http_requests.request(method, f'{DB_URL}/{path}.json', timeout=6, **kw)
+        url = f'{DB_URL}/{path}.json'
+        # Add ETag caching only for GET requests
+        if method == 'GET':
+            headers = kw.get('headers', {})
+            params = kw.get('params', {})
+            
+            # Extract or set params
+            shallow = params.get('shallow')
+            cache_key = f'{path}_shallow' if shallow else path
+            
+            if cache_key in _fb_etags:
+                headers['If-None-Match'] = _fb_etags[cache_key]
+            
+            params['x-header'] = 'etag'
+            kw['headers'] = headers
+            kw['params'] = params
+            
+            r = _fb_session.request(method, url, timeout=6, **kw)
+            if r.status_code == 304:
+                return _fb_cache.get(cache_key)
+            if r.ok:
+                resp_etag = r.headers.get('ETag')
+                data = r.json()
+                if resp_etag:
+                    _fb_etags[cache_key] = resp_etag
+                    _fb_cache[cache_key] = data
+                return data
+            return None
+        
+        # For non-GET requests
+        r = _fb_session.request(method, url, timeout=6, **kw)
         return r.json() if r.ok else None
     except Exception: return None
+
 fb_get    = lambda p:    _fb('GET',    p)
 def fb_get_shallow(path: str):
-    try:
-        r = http_requests.request('GET', f'{DB_URL}/{path}.json?shallow=true', timeout=5)
-        return r.json() if r.ok else None
-    except Exception: return None
+    return _fb('GET', path, params={'shallow': 'true'})
 fb_put    = lambda p, d: _fb('PUT',    p, json=d) is not None
 fb_patch  = lambda p, d: _fb('PATCH',  p, json=d) is not None
 fb_delete = lambda p:    _fb('DELETE', p) is not None
@@ -175,14 +211,13 @@ threading.Thread(target=_hourly_worker, daemon=True).start()
 _device_live_hash = {}
 _device_last_change_ms = {}
 _device_is_offline = {}
+_device_live_buffer = {}
 
-def _live_5min_worker() -> None:
+def _live_buffer_worker() -> None:
     time.sleep(2)
-    _cleanup_counter = 0
     while True:
         try:
             now_ms = int(time.time() * 1000)
-            cutoff_ms = now_ms - (300 * 1000)
             devices_meta = fb_get_shallow('devices') or {}
             
             for did in devices_meta.keys():
@@ -190,29 +225,29 @@ def _live_5min_worker() -> None:
                 if not raw or not isinstance(raw, dict): continue
                 
                 h = _data_hash(raw)
+                if did not in _device_live_buffer:
+                    _device_live_buffer[did] = deque(maxlen=600)
+                
                 if _device_live_hash.get(did) != h:
                     _device_live_hash[did] = h
                     _device_last_change_ms[did] = now_ms
                     _device_is_offline[did] = False
-                    fb_put(f'devices/{did}/Live5Min/{now_ms}', raw)
+                    _device_live_buffer[did].append({'timestamp': now_ms, 'data': raw})
                 else:
                     last_ms = _device_last_change_ms.get(did, now_ms)
                     if now_ms - last_ms > 15000:
                         if not _device_is_offline.get(did, False):
                             _device_is_offline[did] = True
-                            fb_put(f'devices/{did}/Live5Min/{now_ms}', {"offline": True})
-                
-            _cleanup_counter += 1
-            if _cleanup_counter >= 15:
-                _cleanup_counter = 0
-                for did in devices_meta.keys():
-                    live_keys = fb_get_shallow(f'devices/{did}/Live5Min') or {}
-                    keys_to_delete = [k for k in live_keys.keys() if k.isdigit() and int(k) < cutoff_ms]
-                    for k in keys_to_delete:
-                        fb_delete(f'devices/{did}/Live5Min/{k}')
+                            _device_live_buffer[did].append({'timestamp': now_ms, 'data': {"offline": True}})
         except Exception: pass
         time.sleep(3)
-threading.Thread(target=_live_5min_worker, daemon=True).start()
+threading.Thread(target=_live_buffer_worker, daemon=True).start()
+
+@app.route('/api/live-buffer/<device_id>')
+def get_live_buffer(device_id: str):
+    buf = _device_live_buffer.get(device_id)
+    if not buf: return jsonify([])
+    return jsonify(list(buf))
 def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_change, enabled_phases, time_offset_ms):
     try:
         raw = fb_get(f'devices/{device_id}/RealTime')
@@ -318,12 +353,6 @@ def list_devices():
             # Only fetch meta node to avoid large data downloads (History, RealTime, etc.)
             meta = fb_get(f'devices/{did}/meta') or {}
             sensors = meta.get('sensors') or {}
-            
-            # Use shallow data for phase detection if possible, or fetch just what's needed
-            # For simplicity and correctness, we might still need some data for _detect_phases
-            # but _detect_phases currently looks at RealTime and meta/sensors.
-            # Let's optimize _detect_phases or just fetch RealTime shallowly if needed.
-            # Actually, most of the time we just need the sensors list from meta.
             detected = []
             if isinstance(sensors, dict):
                 detected = sorted([k for k in sensors if _PHASE_RE.match(k)], key=lambda x: int(x[1:]))
