@@ -3,3 +3,26 @@
 
 # Firebase credentials (NEVER commit these!)
 serviceAccountKey.json
+
+# Testing and Coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+coverage/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual Environment
+.venv/
+venv/
+
+# Node Modules
+node_modules/
+
+# IDE/Editor
+.vscode/
+.idea/
