@@ -14,8 +14,7 @@ load_dotenv()
 
 _mqtt_live_data = {}
 _mqtt_last_seen = {}
-_firebase_online_state = {}
-_firebase_last_ping = {}
+_db_last_ping = {}
 
 MAP_METRIC = {
     'Voltage_V': 'Voltage (V)',
@@ -24,7 +23,7 @@ MAP_METRIC = {
     'Apparent_Power_kVA': 'Apparent Power (kVA)',
     'Reactive_Power_kVAR': 'Reactive Power (kVAR)',
     'Power_Factor': 'Power Factor',
-    'Phase_Angle_deg': 'Phase Angle (°)',
+    'Phase_Angle_deg': 'Sensor Angle (°)',
     'Frequency_Hz': 'Frequency (Hz)',
     'Active_Energy_kWh': 'Active Energy (kWh)',
     'Apparent_Energy_kVAh': 'Apparent Energy (kVAh)',
@@ -292,7 +291,7 @@ def normalize(raw: dict | None) -> dict | None:
         return {
             'Voltage': sum(V)/d, 'Current': sum(I), 'Power': sum(P), 'Frequency': sum(F)/d,
             'Apparent': sum(S), 'Reactive': sum(Q), 'Energy': sum(E), 'PowerFactor': sum(PF)/d,
-            'Phase1': g(phases[0], 'Phase Angle (°)'),
+            'Phase1': g(phases[0], 'Sensor Angle (°)'),
             'EnergyApparent': sum(g(p, 'Apparent Energy (kVAh)')  for p in phases),
             'EnergyReactive': sum(g(p, 'Reactive Energy (kVARh)') for p in phases),
         }
@@ -311,7 +310,7 @@ def validate_phase_key(phase: str) -> bool: return bool(_PHASE_RE.match(phase))
 _capture_lock  = threading.Lock()
 _capture_state = {
     'active': False, 'device_id': None, 'device_name': None,
-    'session_id': None, 'session_name': None, 'interval': 3,
+    'session_id': None, 'session_name': None, 'interval': 15,
     'count': 0, 'started_at': None, 'enabled_phases': None,
     '_thread': None, '_stop_event': None, '_wake_event': None, '_finalizing': False, 'time_offset_ms': 0,
 }
@@ -407,7 +406,7 @@ def _live_buffer_worker() -> None:
             now_ms = int(time.time() * 1000)
             now = time.time()
 
-            # --- Fase 1: Baca state semua device (1 koneksi) ---
+            # --- Langkah 1: Baca state semua device (1 koneksi) ---
             with get_db_cursor() as cur:
                 cur.execute("SELECT id, online, last_seen FROM devices")
                 db_devices = cur.fetchall()
@@ -415,7 +414,7 @@ def _live_buffer_worker() -> None:
             devices_meta = {row[0]: {'online': row[1], 'last_seen': row[2]} for row in db_devices}
             dids = set(devices_meta.keys()) | set(_mqtt_live_data.keys())
 
-            # --- Fase 2: Hitung perubahan di memori (tanpa DB) ---
+            # --- Langkah 2: Hitung perubahan di memori (tanpa DB) ---
             offline_updates = []    # device_id yang perlu di-set offline
             online_updates  = []    # (device_id, ts_str) yang perlu di-set online
 
@@ -451,13 +450,13 @@ def _live_buffer_worker() -> None:
 
                     meta = devices_meta.get(did)
                     status_changed = not meta or meta['online'] != True
-                    time_for_ping = (now - _firebase_last_ping.get(did, 0) > 30)
+                    time_for_ping = (now - _db_last_ping.get(did, 0) > 30)
                     if status_changed or time_for_ping:
-                        _firebase_last_ping[did] = now
+                        _db_last_ping[did] = now
                         ts_str = (raw or {}).get('Timestamp') or _ts_now()
                         online_updates.append((did, ts_str))
 
-            # --- Fase 3: Tulis semua perubahan dalam 1 koneksi ---
+            # --- Langkah 3: Tulis semua perubahan dalam 1 koneksi ---
             if offline_updates or online_updates:
                 with get_db_cursor() as cur:
                     for did in offline_updates:
@@ -486,9 +485,9 @@ def _init_db_defaults():
             row = cur.fetchone()
             if not row:
                 default_sensors = [
-                    {"phase": "L1", "name": "Phase 1", "enabled": True},
-                    {"phase": "L2", "name": "Phase 2", "enabled": True},
-                    {"phase": "L3", "name": "Phase 3", "enabled": True}
+                    {"phase": "L1", "name": "Sensor 1", "enabled": True},
+                    {"phase": "L2", "name": "Sensor 2", "enabled": True},
+                    {"phase": "L3", "name": "Sensor 3", "enabled": True}
                 ]
                 cur.execute("""
                     INSERT INTO devices (id, name, online, last_seen, sensors)
@@ -548,7 +547,7 @@ def get_history_buffer(device_id: str):
                 'Power Factor':         pf,
                 'Apparent Power (kVA)': round(apparent, 4),
                 'Reactive Power (kVAR)':round(reactive, 4),
-                'Phase Angle (°)':      round(phase_angle, 2),
+                'Sensor Angle (°)':      round(phase_angle, 2),
             }
             
         result = [{'timestamp': ts, 'data': d} for ts, d in sorted(buckets.items())]
@@ -571,13 +570,13 @@ def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_ch
         with _capture_lock:
             sname = _capture_state.get('session_name') or 'Rekaman'
             
-        all_ph = sorted([k for k in (raw or {}) if _PHASE_RE.match(k)], key=lambda x: int(x[1:]))
-        phases = ([p for p in all_ph if p in enabled_phases] or enabled_phases) if enabled_phases else all_ph
+        phases = enabled_phases if enabled_phases else sorted([k for k in (raw or {}) if _PHASE_RE.match(k)], key=lambda x: int(x[1:]))
         if not phases: return
         
         with get_db_cursor() as cur:
             for ph in phases:
                 pd = {} if offline else ((raw or {}).get(ph) if isinstance((raw or {}).get(ph), dict) else {})
+                phase_offline = offline or not bool(pd)
                 def f(k):
                     try: return float((pd or {}).get(k) or 0)
                     except: return 0.0
@@ -591,11 +590,11 @@ def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_ch
                     device_id, ph, ts, epoch_val,
                     f('Voltage (V)'), f('Current (A)'), f('Power (W)'),
                     f('Frequency (Hz)'), f('Active Energy (kWh)'), f('Power Factor'),
-                    offline, session_id, sname
+                    phase_offline, session_id, sname
                 ))
                 
         with _capture_lock:
-            _capture_state['count'] += 1
+            _capture_state['count'] += len(phases)
     except Exception as e:
         print(f"Error in _do_capture_io: {e}")
 
@@ -707,7 +706,7 @@ def init_device_sensors(device_id: str):
                 if ph not in existing_phases:
                     current_sensors.append({
                         'phase': ph,
-                        'name': f'Phase {ph[1:]}',
+                        'name': f'Sensor {ph[1:]}',
                         'enabled': True,
                         'properties': []
                     })
@@ -744,7 +743,7 @@ def rename_device(device_id: str):
 @app.route('/api/devices/<device_id>/sensors/<phase>/rename', methods=['POST'])
 def rename_sensor(device_id: str, phase: str):
     phase = phase.upper()
-    if not validate_phase_key(phase): return jsonify({'ok': False, 'error': f'Phase tidak valid: {phase}.'}), 400
+    if not validate_phase_key(phase): return jsonify({'ok': False, 'error': f'Sensor tidak valid: {phase}.'}), 400
     name = ((request.get_json(silent=True) or {}).get('name') or '').strip()
     ok, err = validate_device_name(name)
     if not ok: return jsonify({'ok': False, 'error': err}), 400
@@ -778,7 +777,7 @@ def rename_sensor(device_id: str, phase: str):
 @app.route('/api/devices/<device_id>/sensors/<phase>/init', methods=['POST'])
 def init_sensor(device_id: str, phase: str):
     phase = phase.upper()
-    if not validate_phase_key(phase): return jsonify({'ok': False, 'error': f'Phase tidak valid: {phase}.'}), 400
+    if not validate_phase_key(phase): return jsonify({'ok': False, 'error': f'Sensor tidak valid: {phase}.'}), 400
     try:
         with get_db_cursor() as cur:
             cur.execute("SELECT sensors FROM devices WHERE id = %s", (device_id,))
@@ -791,7 +790,7 @@ def init_sensor(device_id: str, phase: str):
                 if s.get('phase') == phase:
                     return jsonify({'ok': True, 'exists': True, 'sensor': s})
                     
-            new_s = {'phase': phase, 'name': f'Phase {phase[1:]}', 'enabled': True, 'properties': []}
+            new_s = {'phase': phase, 'name': f'Sensor {phase[1:]}', 'enabled': True, 'properties': []}
             sensors_list.append(new_s)
             cur.execute("UPDATE devices SET sensors = %s WHERE id = %s", (json.dumps(sensors_list), device_id))
         return jsonify({'ok': True, 'sensor': new_s, 'timestamp': int(time.time() * 1000)})
@@ -801,7 +800,7 @@ def init_sensor(device_id: str, phase: str):
 @app.route('/api/devices/<device_id>/sensors/<phase>/enabled', methods=['POST'])
 def set_phase_enabled(device_id: str, phase: str):
     phase = phase.upper()
-    if not validate_phase_key(phase): return jsonify({'ok': False, 'error': f'Phase tidak valid: {phase}.'}), 400
+    if not validate_phase_key(phase): return jsonify({'ok': False, 'error': f'Sensor tidak valid: {phase}.'}), 400
     enabled = bool((request.get_json(silent=True) or {}).get('enabled', True))
     try:
         with get_db_cursor() as cur:
@@ -845,10 +844,10 @@ def capture_start():
     did   = (body.get('deviceId')    or '').strip()
     dname = (body.get('deviceName')  or '').strip()
     sname = (body.get('sessionName') or '').strip() or f'Rekaman {_ts_now()}'
-    iv    = max(1, int(body.get('interval', 3)))
+    iv    = max(15, int(body.get('interval', 15)))
     hints = sorted([p for p in (body.get('phases') or []) if _PHASE_RE.match(p)], key=lambda x: int(x[1:]))
     if not did: return jsonify({'ok': False, 'error': 'deviceId harus diisi'}), 400
-    if not hints: return jsonify({'ok': False, 'error': 'Minimal 1 phase harus diaktifkan'}), 400
+    if not hints: return jsonify({'ok': False, 'error': 'Minimal 1 sensor harus diaktifkan'}), 400
     with _capture_lock:
         if _capture_state['active'] or _capture_state.get('_finalizing'):
             return jsonify({'ok': False, 'error': 'Capture sudah berjalan atau sedang finalisasi'}), 409
@@ -876,7 +875,7 @@ def capture_stop():
 
 @app.route('/api/capture/interval', methods=['POST'])
 def capture_interval():
-    iv = max(1, int((request.get_json(silent=True) or {}).get('interval', 3)))
+    iv = max(15, int((request.get_json(silent=True) or {}).get('interval', 15)))
     with _capture_lock:
         _capture_state['interval'] = iv
         ev = _capture_state.get('_wake_event')
@@ -926,14 +925,15 @@ def get_sessions(device_id: str):
         with get_db_cursor() as cur:
             cur.execute("""
                 SELECT session_id, session_name,
-                       MIN(timestamp) as start_time, MAX(timestamp) as end_time,
+                       (SELECT timestamp FROM history h2 WHERE h2.session_id = h.session_id ORDER BY h2.epoch ASC LIMIT 1) as start_time,
+                       (SELECT timestamp FROM history h3 WHERE h3.session_id = h.session_id ORDER BY h3.epoch DESC LIMIT 1) as end_time,
                        COUNT(*) as record_count,
                        MIN(epoch) as start_epoch,
                        ARRAY_AGG(DISTINCT phase ORDER BY phase) as phases
-                FROM history
+                FROM history h
                 WHERE device_id = %s
                 GROUP BY session_id, session_name
-                ORDER BY MIN(epoch) DESC
+                ORDER BY start_epoch DESC
             """, (device_id,))
             rows = cur.fetchall()
 
@@ -1000,6 +1000,7 @@ def get_session_history_phase(device_id: str, session_id: str, phase: str):
                 
             history[key] = {
                 'timestamp': ts,
+                'epoch': epoch_val,
                 'offline': offline,
                 'Voltage': v,
                 'Current': c,
