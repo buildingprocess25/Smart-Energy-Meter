@@ -1,7 +1,6 @@
 
 let _mqttClient = null;
 let _subscribedTopic = null;
-let _lastPhaseCount = 0;
 let _firstSnap = true;
 
 const MAP_METRIC_JS = {
@@ -41,8 +40,8 @@ let _hourlyListenerAttached = null;
 let dayFirebaseData = {};
 let _dayListenerAttached = null;
 let realtimeChart = null;
-let selectedParameter = 'voltage';
-let timeFilter = 'day';
+let selectedParameter = 'current';
+let timeFilter = 'all';
 let chartTargetDate = null;
 let _hourlyListenerDate = null;
 let _userIsZoomed = false;
@@ -137,11 +136,11 @@ let _lastChartDay = -1;
 let _timeWindowCheckId = null;
 let _aggRebuildId = null;
 const PHASE_COLORS = [
-    { line: '#006400', bar: 'rgba(0,100,0,0.85)', light: 'rgba(0,100,0,0.15)' },    // L1: Dark Green
+    { line: '#006400', bar: 'rgba(0,100,0,0.85)', light: 'rgba(0,100,0,0.15)' },  // L1: Dark Green
     { line: '#b38600', bar: 'rgba(179,134,0,0.85)', light: 'rgba(179,134,0,0.15)' },  // L2: Dark Gold
-    { line: '#004073', bar: 'rgba(0,64,115,0.85)', light: 'rgba(0,64,115,0.15)' },   // L3: Deep Blue
-    { line: '#333333', bar: 'rgba(51,51,51,0.85)', light: 'rgba(51,51,51,0.15)' },     // L4
-    { line: '#4a2311', bar: 'rgba(74,35,17,0.85)', light: 'rgba(74,35,17,0.15)' },     // L5
+    { line: '#004073', bar: 'rgba(0,64,115,0.85)', light: 'rgba(0,64,115,0.15)' },  // L3: Deep Blue
+    { line: '#333333', bar: 'rgba(51,51,51,0.85)', light: 'rgba(51,51,51,0.15)' },  // L4: Dark Gray
+    { line: '#4a2311', bar: 'rgba(74,35,17,0.85)', light: 'rgba(74,35,17,0.15)' },  // L5: Dark Brown
 ];
 function getPhaseColors(phase) {
     const idx = parseInt(phase.slice(1)) - 1;
@@ -382,6 +381,31 @@ function setPhase(phase) {
         if (data) updateDisplayCards(data);
         else updateDisplayCardsBlank();
     }
+
+    // Sembunyikan semua phase di chart kecuali yang sedang aktif dipilih
+    _hiddenPhases.clear();
+    const enabledKeys = _getEnabledPhaseKeys();
+    enabledKeys.forEach(k => {
+        if (k !== phase) {
+            _hiddenPhases.add(k);
+        }
+    });
+
+    if (typeof renderPhaseToggles === 'function') {
+        renderPhaseToggles();
+    }
+
+    if (realtimeChart && realtimeChart.data && realtimeChart.data.datasets) {
+        realtimeChart.data.datasets.forEach(ds => {
+            if (ds._phaseKey) {
+                ds.hidden = _hiddenPhases.has(ds._phaseKey);
+            }
+        });
+        const { yMin, yMax } = getYBoundsMulti(realtimeChart.data.datasets, selectedParameter);
+        realtimeChart.options.scales.y.min = yMin;
+        realtimeChart.options.scales.y.max = yMax;
+        realtimeChart.update('none');
+    }
 }
 function updatePhaseSelector(phases) {
     const container = $('phaseSelectorBtns');
@@ -401,7 +425,11 @@ function updatePhaseSelector(phases) {
             : p;
         return `<button class="phase-btn${selectedPhase === p ? ' active' : ''}" data-phase="${p}" onclick="setPhase('${p}')">${label}</button>`;
     }).join('');
-    if (typeof renderPhaseToggles === 'function') renderPhaseToggles();
+    if (selectedPhase) {
+        setPhase(selectedPhase);
+    } else {
+        if (typeof renderPhaseToggles === 'function') renderPhaseToggles();
+    }
 }
 const _p2 = v => String(v).padStart(2, '0');
 function _minKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${_p2(d.getMonth() + 1)}-${_p2(d.getDate())}T${_p2(d.getHours())}:${_p2(d.getMinutes())}`; }
@@ -562,7 +590,7 @@ function getHourlyFirebaseData(phase, param) {
     const now = new Date();
     // Batas akhir: jika hari ini, sampai slot 15 menit terakhir yang sudah lewat
     const endHour = isToday ? now.getHours() : 23;
-    const endMin  = isToday ? Math.floor(now.getMinutes() / 15) * 15 : 45;
+    const endMin = isToday ? Math.floor(now.getMinutes() / 15) * 15 : 45;
 
     const liveParamKeys = {
         Voltage: 'Voltage (V)', Current: 'Current (A)', Power: 'Power (W)',
@@ -586,7 +614,7 @@ function getHourlyFirebaseData(phase, param) {
                     values.push(null);
                 }
             } else if (isToday && h === endHour && m === endMin
-                       && isConnected && rawRealtimeData?.[phase]) {
+                && isConnected && rawRealtimeData?.[phase]) {
                 // Slot sekarang: pakai data live jika belum ada snapshot tersimpan
                 const liveVal = parseFloat(rawRealtimeData[phase][liveParamKeys[field] || 'Voltage (V)']) || 0;
                 values.push(parseFloat(liveVal.toFixed(4)));
@@ -602,12 +630,12 @@ async function fetchChartDataFromServer() {
     if (!selectedDeviceId) return;
     const range = timeFilter;
     if (range === 'all') return;
-    
+
     _showChartSpinner();
     try {
         const res = await fetch(`/api/devices/${selectedDeviceId}/chart-data?date=${chartTargetDate}&range=${range}`);
         const list = await res.json();
-        
+
         if (range === 'day') {
             hourlyFirebaseData = {};
             list.forEach(item => {
@@ -616,17 +644,17 @@ async function fetchChartDataFromServer() {
                 const mm = String(d.getMinutes()).padStart(2, '0');
                 const key = `${hh}${mm}`;
                 const datePart = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                
+
                 Object.keys(item.data).forEach(phase => {
                     if (!hourlyFirebaseData[phase]) hourlyFirebaseData[phase] = {};
                     hourlyFirebaseData[phase][key] = {
-                        Voltage:     item.data[phase].Voltage,
-                        Current:     item.data[phase].Current,
-                        Power:       item.data[phase].Power,
-                        Frequency:   item.data[phase].Frequency,
-                        Energy:      item.data[phase].Energy,
+                        Voltage: item.data[phase].Voltage,
+                        Current: item.data[phase].Current,
+                        Power: item.data[phase].Power,
+                        Frequency: item.data[phase].Frequency,
+                        Energy: item.data[phase].Energy,
                         PowerFactor: item.data[phase].PowerFactor,
-                        offline:     item.data[phase].offline || false,
+                        offline: item.data[phase].offline || false,
                         date: datePart
                     };
                 });
@@ -637,7 +665,7 @@ async function fetchChartDataFromServer() {
             list.forEach(item => {
                 const d = new Date(item.timestamp);
                 const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                
+
                 Object.keys(item.data).forEach(phase => {
                     if (!dayFirebaseData[phase]) dayFirebaseData[phase] = {};
                     dayFirebaseData[phase][dateKey] = {
@@ -779,6 +807,11 @@ const CARD_IDS = ['voltage', 'current', 'power', 'frequency', 'energy', 'powerFa
 const CARD_DEC = { voltage: 1, current: 2, power: 1, frequency: 1, energy: 3, powerFactor: 3 };
 function updateDisplayCards(data) {
     const fmt = (v, d) => (v != null && !isNaN(v)) ? parseFloat(v).toFixed(d) : '---';
+    // Jika voltage = 0, tampilkan '---' seperti offline
+    if (data.Voltage === undefined || data.Voltage === null || parseFloat(data.Voltage) === 0) {
+        updateDisplayCardsBlank('offline');
+        return;
+    }
     CARD_IDS.forEach(id => {
         const el = $(id);
         if (el) el.textContent = fmt(data[id.charAt(0).toUpperCase() + id.slice(1)], CARD_DEC[id]);
@@ -1426,6 +1459,31 @@ async function _chartInit(deviceId) {
         // Abort: ada _chartInit lebih baru yang sudah jalan saat kita fetch
         if (seq !== _chartInitSeq) return;
 
+        // ── Pre-populate rawRealtimeData from latest live-buffer data ──
+        if (Array.isArray(dataList) && dataList.length > 0) {
+            const latestItem = dataList[dataList.length - 1];
+            if (latestItem.data && latestItem.data.offline) {
+                isConnected = false;
+                updateDisplayCardsBlank('offline');
+            } else {
+                const lastValidItem = dataList.slice().reverse().find(item => item.data && !item.data.offline);
+                if (lastValidItem) {
+                    rawRealtimeData = JSON.parse(JSON.stringify(lastValidItem.data));
+                    isConnected = true;
+                    lastDataTimestamp = lastValidItem.timestamp;
+                    const normalized = normalizeFirebaseData(rawRealtimeData);
+                    if (normalized) {
+                        if (selectedPhase) {
+                            const phaseData = getPhaseDisplayData(rawRealtimeData, selectedPhase);
+                            if (phaseData) updateDisplayCards(phaseData);
+                        } else {
+                            updateDisplayCards(normalized);
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Build live-data map ──
         const liveData = {};
         if (Array.isArray(dataList)) {
@@ -2045,15 +2103,14 @@ function _attachRealtimeListener(deviceId) {
     _prevDeviceId = deviceId;
     _chartInit(deviceId);
     _firstSnap = true;
-    _lastPhaseCount = Object.keys(phaseChartData).filter(k => /^L\d+$/.test(k)).length;
-    
+
     initMQTT();
     _subscribeToDevice(deviceId);
 }
 
 function initMQTT() {
     if (_mqttClient) return;
-    
+
     updateConnectionStatus('connecting');
     const brokerUrl = 'wss://166f9507c83945a4a1c4be54fccdb9a9.s1.eu.hivemq.cloud:8884/mqtt';
     const options = {
@@ -2065,16 +2122,16 @@ function initMQTT() {
         connectTimeout: 30 * 1000,
         clean: true
     };
-    
+
     _mqttClient = mqtt.connect(brokerUrl, options);
-    
+
     _mqttClient.on('connect', () => {
         console.log('[MQTT] Connected to broker');
         if (selectedDeviceId) {
             _subscribeToDevice(selectedDeviceId);
         }
     });
-    
+
     // Mapping kunci JSON singkat dari ESP32 → nama field standar
     const _ESP32_JSON_MAP_JS = {
         'V': 'Voltage (V)', 'A': 'Current (A)', 'W': 'Power (W)',
@@ -2131,12 +2188,12 @@ function initMQTT() {
             console.error('[MQTT] Message parsing error:', e);
         }
     });
-    
+
     _mqttClient.on('close', () => {
         console.log('[MQTT] Connection closed');
         updateConnectionStatus(false);
     });
-    
+
     _mqttClient.on('error', (err) => {
         console.error('[MQTT] Connection error:', err);
         updateConnectionStatus(false);
@@ -2145,12 +2202,12 @@ function initMQTT() {
 
 function _subscribeToDevice(deviceId) {
     if (!_mqttClient || !_mqttClient.connected) return;
-    
+
     if (_subscribedTopic) {
         _mqttClient.unsubscribe(_subscribedTopic);
         console.log(`[MQTT] Unsubscribed from: ${_subscribedTopic}`);
     }
-    
+
     _subscribedTopic = `energymeter/${deviceId}/#`;
     _mqttClient.subscribe(_subscribedTopic, (err) => {
         if (err) {
@@ -2170,10 +2227,7 @@ function _processIncomingMQTTData() {
     // Dulu: data pertama selalu dibuang dan tidak pernah set isConnected=true
     _firstSnap = false;
 
-    // [FIX] Jika semua channel zero → device belum siap, tapi jangan langsung offline
-    // Tunggu data berikutnya (lastDataTimestamp sudah diset di message handler)
-    const isZero = data.Voltage === 0 && data.Current === 0 && data.Power === 0;
-    if (isZero) return;
+
 
     // [FIX] Selalu update isConnected dan lastSensorValues untuk data valid,
     // terlepas dari apakah nilai berubah atau tidak.
@@ -2188,10 +2242,11 @@ function _processIncomingMQTTData() {
     };
     isConnected = true;
 
-    const currentPhaseCount = (data._phases || []).length;
-    if (currentPhaseCount !== _lastPhaseCount && currentPhaseCount > 0) {
-        _lastPhaseCount = currentPhaseCount;
-        updatePhaseSelector(data._phases || []);
+    const dev = _deviceListCache.find(d => d.id === selectedDeviceId);
+    const knownPhases = (dev?.phases || []).map(p => p.phase);
+    const hasNewPhase = (data._phases || []).some(p => !knownPhases.includes(p));
+
+    if (hasNewPhase && (data._phases || []).length > 0) {
         fetch(`/api/devices/${selectedDeviceId}/init-sensors`, { method: 'POST' })
             .then(r => r.json()).then(() => loadDevices()).catch(() => { });
     }
@@ -2253,7 +2308,7 @@ async function _attachHistoryListener(deviceId) {
     try {
         const res = await fetch(`/api/devices/${deviceId}/sessions`);
         const list = await res.json();
-        
+
         let totalCount = 0;
         historyData = [];
         sessionsData = {};
@@ -2585,7 +2640,7 @@ async function saveRenameSessionPhase(sessionId, phase) {
         });
         const json = await res.json();
         if (!json.ok) throw new Error(json.error || 'Server error');
-        
+
         await showModal('Berhasil', `Nama fase ${phase} diubah menjadi:\n"${newName}"`, 'success');
     } catch (e) {
         if (labelEl) labelEl.textContent = oldName;
@@ -2714,7 +2769,7 @@ async function clearRecords() {
         });
         const json = await res.json();
         if (!json.ok) throw new Error(json.error || 'Server error');
-        
+
         historyData = []; recordsBySession = {}; sessionsData = {};
         buildSessionUI();
         await showModal('Berhasil Dihapus', 'Semua data rekaman telah dihapus.', 'success');
@@ -3010,7 +3065,7 @@ async function confirmChangeTime() {
         if (!json.ok) throw new Error(json.error || 'Server error');
 
         await _attachHistoryListener(selectedDeviceId);
-        
+
         hideGlobalLoader();
         showModal('Sukses', 'Waktu sesi berhasil diubah dan disinkronkan.', 'success');
     } catch (e) {

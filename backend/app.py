@@ -318,6 +318,7 @@ _capture_state = {
 def _data_hash(raw): return hashlib.md5(json.dumps(raw, sort_keys=True).encode()).hexdigest() if raw else None
 _hourly_stop = threading.Event()
 _TELEMETRY_PHASES = ['L1', 'L2', 'L3', 'L4', 'L5']  # Selalu simpan 5 phase ini
+_last_write_per_device: dict[str, str] = {}  # guard duplikat per device
 
 def _do_hourly_capture_device(device_id: str) -> None:
     try:
@@ -325,11 +326,11 @@ def _do_hourly_capture_device(device_id: str) -> None:
         m   = (now.minute // 15) * 15  # Interval 15 menit
         key = f'{now.strftime("%H")}{str(m).zfill(2)}'
 
-        # Cegah duplikat dalam slot waktu yang sama
+        # Cegah duplikat dalam slot waktu yang sama (per device)
         state_key = f"{device_id}_{key}_{now.strftime('%Y-%m-%d')}"
-        if getattr(_do_hourly_capture_device, "_last_write", None) == state_key:
+        if _last_write_per_device.get(device_id) == state_key:
             return
-        _do_hourly_capture_device._last_write = state_key
+        _last_write_per_device[device_id] = state_key
 
         ts        = f'{now.strftime("%H")}:{str(m).zfill(2)} {now.strftime("%d/%m/%Y")}'
         epoch_val = int(now.timestamp() * 1000)
@@ -337,6 +338,8 @@ def _do_hourly_capture_device(device_id: str) -> None:
         # Data MQTT terakhir dari cache (bisa None jika device belum pernah kirim data)
         raw            = _mqtt_live_data.get(device_id) or {}
         device_offline = time.time() - _mqtt_last_seen.get(device_id, 0) > 60
+
+        print(f"[Telemetry] Snapshot {device_id} slot={ts} offline={device_offline}")
 
         with get_db_cursor() as cur:
             for ph in _TELEMETRY_PHASES:
@@ -403,35 +406,35 @@ def _live_buffer_worker() -> None:
         try:
             now_ms = int(time.time() * 1000)
             now = time.time()
-            
+
+            # --- Fase 1: Baca state semua device (1 koneksi) ---
             with get_db_cursor() as cur:
                 cur.execute("SELECT id, online, last_seen FROM devices")
                 db_devices = cur.fetchall()
-            
+
             devices_meta = {row[0]: {'online': row[1], 'last_seen': row[2]} for row in db_devices}
             dids = set(devices_meta.keys()) | set(_mqtt_live_data.keys())
-            
+
+            # --- Fase 2: Hitung perubahan di memori (tanpa DB) ---
+            offline_updates = []    # device_id yang perlu di-set offline
+            online_updates  = []    # (device_id, ts_str) yang perlu di-set online
+
             for did in dids:
                 raw = _mqtt_live_data.get(did)
                 last_seen = _mqtt_last_seen.get(did, 0)
                 is_offline = (now - last_seen > 60) or not raw
-                
+
                 if did not in _device_live_buffer:
                     _device_live_buffer[did] = deque(maxlen=600)
-                
+
                 if is_offline:
                     if not _device_is_offline.get(did, False):
                         _device_is_offline[did] = True
                         _device_live_buffer[did].append({'timestamp': now_ms, 'data': {"offline": True}})
-                    
+
                     meta = devices_meta.get(did)
                     if not meta or meta['online'] != False:
-                        with get_db_cursor() as cur:
-                            cur.execute("""
-                                INSERT INTO devices (id, name, online, last_seen)
-                                VALUES (%s, %s, FALSE, '---')
-                                ON CONFLICT (id) DO UPDATE SET online = FALSE;
-                            """, (did, did))
+                        offline_updates.append(did)
                 else:
                     h = _data_hash(raw)
                     if _device_live_hash.get(did) != h:
@@ -445,19 +448,31 @@ def _live_buffer_worker() -> None:
                             if not _device_is_offline.get(did, False):
                                 _device_is_offline[did] = True
                                 _device_live_buffer[did].append({'timestamp': now_ms, 'data': {"offline": True}})
-                    
+
                     meta = devices_meta.get(did)
                     status_changed = not meta or meta['online'] != True
                     time_for_ping = (now - _firebase_last_ping.get(did, 0) > 30)
                     if status_changed or time_for_ping:
                         _firebase_last_ping[did] = now
-                        ts_str = raw.get('Timestamp') or _ts_now()
-                        with get_db_cursor() as cur:
-                            cur.execute("""
-                                INSERT INTO devices (id, name, online, last_seen)
-                                VALUES (%s, %s, TRUE, %s)
-                                ON CONFLICT (id) DO UPDATE SET online = TRUE, last_seen = %s;
-                            """, (did, did, ts_str, ts_str))
+                        ts_str = (raw or {}).get('Timestamp') or _ts_now()
+                        online_updates.append((did, ts_str))
+
+            # --- Fase 3: Tulis semua perubahan dalam 1 koneksi ---
+            if offline_updates or online_updates:
+                with get_db_cursor() as cur:
+                    for did in offline_updates:
+                        cur.execute("""
+                            INSERT INTO devices (id, name, online, last_seen)
+                            VALUES (%s, %s, FALSE, '---')
+                            ON CONFLICT (id) DO UPDATE SET online = FALSE;
+                        """, (did, did))
+                    for did, ts_str in online_updates:
+                        cur.execute("""
+                            INSERT INTO devices (id, name, online, last_seen)
+                            VALUES (%s, %s, TRUE, %s)
+                            ON CONFLICT (id) DO UPDATE SET online = TRUE, last_seen = %s;
+                        """, (did, did, ts_str, ts_str))
+
         except Exception as e:
             print(f"Error in _live_buffer_worker: {e}")
         time.sleep(3)

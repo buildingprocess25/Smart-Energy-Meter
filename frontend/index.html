@@ -186,9 +186,9 @@
                                                 title="Maju">&#10095;</button>
                                         </div>
                                         <div class="time-filter-group">
-                                            <button class="time-filter-btn" data-filter="all"
+                                            <button class="time-filter-btn active" data-filter="all"
                                                 onclick="setTimeFilter('all')">Second</button>
-                                            <button class="time-filter-btn active" data-filter="day"
+                                            <button class="time-filter-btn" data-filter="day"
                                                 onclick="setTimeFilter('day')">Day</button>
                                             <button class="time-filter-btn" data-filter="week"
                                                 onclick="setTimeFilter('week')">Week</button>
@@ -199,7 +199,7 @@
                                         <select id="parameterSelect" class="parameter-select"
                                             onchange="changeParameter()">
                                             <option value="voltage">Voltage (V)</option>
-                                            <option value="current">Current (A)</option>
+                                            <option value="current" selected>Current (A)</option>
                                             <option value="power">Power (W)</option>
                                             <option value="frequency">Frequency (Hz)</option>
                                             <option value="energy">Energy (kWh)</option>
