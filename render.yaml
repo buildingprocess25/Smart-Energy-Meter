@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: energy-meter
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: DATABASE_URL
+        sync: false          # diisi manual di Render dashboard
+      - key: MQTT_BROKER
+        sync: false
+      - key: MQTT_PORT
+        sync: false
+      - key: MQTT_USERNAME
+        sync: false
+      - key: MQTT_PASSWORD
+        sync: false
+      - key: MQTT_USE_TLS
+        value: "true"
