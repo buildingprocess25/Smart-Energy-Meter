@@ -807,11 +807,6 @@ const CARD_IDS = ['voltage', 'current', 'power', 'frequency', 'energy', 'powerFa
 const CARD_DEC = { voltage: 1, current: 2, power: 1, frequency: 1, energy: 3, powerFactor: 3 };
 function updateDisplayCards(data) {
     const fmt = (v, d) => (v != null && !isNaN(v)) ? parseFloat(v).toFixed(d) : '---';
-    // Jika voltage = 0, tampilkan '---' seperti offline
-    if (data.Voltage === undefined || data.Voltage === null || parseFloat(data.Voltage) === 0) {
-        updateDisplayCardsBlank('offline');
-        return;
-    }
     CARD_IDS.forEach(id => {
         const el = $(id);
         if (el) el.textContent = fmt(data[id.charAt(0).toUpperCase() + id.slice(1)], CARD_DEC[id]);

@@ -441,12 +441,6 @@ def _live_buffer_worker() -> None:
                         _device_last_change_ms[did] = now_ms
                         _device_is_offline[did] = False
                         _device_live_buffer[did].append({'timestamp': now_ms, 'data': raw})
-                    else:
-                        last_ms = _device_last_change_ms.get(did, now_ms)
-                        if now_ms - last_ms > 30000:
-                            if not _device_is_offline.get(did, False):
-                                _device_is_offline[did] = True
-                                _device_live_buffer[did].append({'timestamp': now_ms, 'data': {"offline": True}})
 
                     meta = devices_meta.get(did)
                     status_changed = not meta or meta['online'] != True
