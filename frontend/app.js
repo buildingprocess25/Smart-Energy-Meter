@@ -27,6 +27,10 @@ let connectionCheckInterval = null;
 let selectedDeviceId = '';
 let selectedDeviceName = '';
 let lastSensorValues = null;
+// Per-phase last-seen: tracks when each phase last received an MQTT message
+let _phaseLastSeen = {}; // { 'L1': <timestamp ms>, 'L2': <timestamp ms>, ... }
+const PHASE_DATA_TIMEOUT_MS = 30000; // 30 seconds
+let _phaseTimeoutCheckId = null;
 let _deviceListCache = [];
 let _prevDeviceId = '';
 let currentSessionId = null;
@@ -1966,6 +1970,7 @@ async function onDeviceChange(deviceId) {
     updatePhaseSelector([]);
     resetChartData();
     rawRealtimeData = null;
+    _phaseLastSeen = {}; // reset per-phase timestamps on device change
 
     const canvas = document.getElementById('realtimeChart');
     if (canvas) {
@@ -2156,6 +2161,8 @@ function initMQTT() {
                     // ESP32 kirim 1 JSON per channel:
                     // {"V":220.1,"A":1.234,"W":270.1,"Hz":50.01,"kWh":0.123,"pf":0.987}
                     const phase = parts[2];
+                    // Track per-phase last-seen timestamp
+                    _phaseLastSeen[phase] = Date.now();
                     try {
                         const data = JSON.parse(payload);
                         if (!rawRealtimeData[phase]) rawRealtimeData[phase] = {};
@@ -2171,6 +2178,8 @@ function initMQTT() {
                 } else if (parts.length === 4) {
                     // [FORMAT LAMA] energymeter/alat1/L1/Voltage_V → float tunggal
                     const phase = parts[2];
+                    // Track per-phase last-seen timestamp (format lama)
+                    _phaseLastSeen[phase] = Date.now();
                     const metric = parts[3];
                     if (!rawRealtimeData[phase]) {
                         rawRealtimeData[phase] = {};
@@ -2249,11 +2258,37 @@ function _processIncomingMQTTData() {
     realtimeData = data;
 
     if (selectedPhase) {
-        const displayData = getPhaseDisplayData(rawRealtimeData, selectedPhase);
-        if (displayData) updateDisplayCards(displayData);
-        else updateDisplayCardsBlank();
+        // Check if the selected phase has timed out (no MQTT data for 30s)
+        const phaseSeen = _phaseLastSeen[selectedPhase];
+        const phaseTimedOut = !phaseSeen || (Date.now() - phaseSeen > PHASE_DATA_TIMEOUT_MS);
+        if (phaseTimedOut) {
+            updateDisplayCardsBlank();
+        } else {
+            const displayData = getPhaseDisplayData(rawRealtimeData, selectedPhase);
+            if (displayData) updateDisplayCards(displayData);
+            else updateDisplayCardsBlank();
+        }
     }
     updateConnectionStatus(true);
+}
+
+// Checks if the currently-selected phase has stopped publishing and blanks the cards
+function _checkPhaseDataFreshness() {
+    if (!isConnected || !selectedPhase) return;
+    const phaseSeen = _phaseLastSeen[selectedPhase];
+    const phaseTimedOut = !phaseSeen || (Date.now() - phaseSeen > PHASE_DATA_TIMEOUT_MS);
+    if (phaseTimedOut) {
+        // Only blank if currently showing real data (prevent double-update)
+        const firstCard = document.getElementById('voltage');
+        if (firstCard && firstCard.textContent !== '---') {
+            updateDisplayCardsBlank();
+        }
+    }
+}
+
+function startPhaseTimeoutMonitoring() {
+    if (_phaseTimeoutCheckId) clearInterval(_phaseTimeoutCheckId);
+    _phaseTimeoutCheckId = setInterval(_checkPhaseDataFreshness, 2000);
 }
 function updateConnectionStatus(connected) {
     const dot = DOM.statusDot, txt = DOM.statusText;
@@ -3173,6 +3208,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     setInterval(_saveChartCache, 60_000); // auto-save chart cache tiap 60 detik
     updateConnectionStatus('connecting');
     startConnectionMonitoring();
+    startPhaseTimeoutMonitoring();
     startTimeWindowMonitoring();
     await syncCaptureStatus();
     _startStatusPolling();
