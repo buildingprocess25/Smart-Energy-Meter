@@ -1725,7 +1725,17 @@ async function loadDevices() {
         });
         _deviceListCache = devices;
         const visible = devices;
-        if (!visible.length) return;
+        
+        _populateDeviceSelect(visible);
+        if (!visible.length) {
+            selectedDeviceId = '';
+            selectedDeviceName = '';
+            renderDeviceList([]);
+            updatePhaseSelector([]);
+            updateConnectionStatus(false);
+            updateDisplayCardsBlank();
+            return;
+        }
 
         const initialLoad = !selectedDeviceId;
         if (initialLoad) {
@@ -1745,7 +1755,6 @@ async function loadDevices() {
             _attachDayListener(selectedDeviceId);
         }
 
-        _populateDeviceSelect(visible);
         if (activeDev) {
             renderDeviceList([activeDev]);
             if (activeDev.phases?.length) {
@@ -1774,6 +1783,7 @@ function renderDeviceList(devices) {
         return;
     }
     const editSVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
+    const deleteSVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>`;
     const checkSVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>`;
     const closeSVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
     container.innerHTML = devices.map(d => {
@@ -1822,7 +1832,10 @@ function renderDeviceList(devices) {
                         <p class="device-item-id">${d.phaseCount || 0} Sensor · Last seen: ${d.lastSeen || '---'}</p>
                     </div>
                 </div>
-                <button class="device-edit-btn" onclick="startRenameDevice('${d.id}')" title="Ubah nama">${editSVG}</button>
+                <div style="display:flex;gap:4px">
+                    <button class="device-edit-btn" onclick="startRenameDevice('${d.id}')" title="Ubah nama">${editSVG}</button>
+                    <button class="device-delete-btn" onclick="deleteDevice('${d.id}', '${d.name || d.id}')" title="Hapus device" style="background:none;border:none;color:var(--text-tertiary);cursor:pointer;padding:4px;display:flex;align-items:center;justify-content:center;transition:color .2s" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text-tertiary)'">${deleteSVG}</button>
+                </div>
             </div>
             <div class="device-edit-mode" id="edit_${d.id}" style="display:none">
                 <div class="device-item-info">
@@ -1901,6 +1914,42 @@ async function saveDeviceName(deviceId) {
         }
         closeModal();
         await showModal('Error', e.name === 'AbortError' ? 'Request timeout (8s) - Periksa koneksi internet' : 'Gagal menyimpan: ' + e.message, 'error');
+    }
+}
+async function deleteDevice(deviceId, deviceName) {
+    const confirmed = await showModal('Hapus Device', `Apakah Anda yakin ingin menghapus device:\n"${deviceName}"?\n\nSemua data histori dan data sensor terkait akan dihapus secara permanen dari server.`, 'warning', ['confirm']);
+    if (!confirmed) return;
+    
+    showGlobalLoader();
+    try {
+        const response = await fetch(`/api/devices/${deviceId}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) {
+            const e = await response.json().catch(() => ({}));
+            throw new Error(e.error || `HTTP ${response.status}`);
+        }
+        const json = await response.json();
+        if (!json.ok) throw new Error(json.error || 'Gagal menghapus device');
+        
+        hideGlobalLoader();
+        await showModal('Berhasil', `Device "${deviceName}" berhasil dihapus.`, 'success');
+        
+        _deviceListCache = _deviceListCache.filter(d => d.id !== deviceId);
+        
+        if (selectedDeviceId === deviceId) {
+            selectedDeviceId = '';
+            selectedDeviceName = '';
+            if (_mqttClient && _subscribedTopic) {
+                _mqttClient.unsubscribe(_subscribedTopic);
+                _subscribedTopic = null;
+            }
+        }
+        
+        await loadDevices();
+    } catch (e) {
+        hideGlobalLoader();
+        await showModal('Error', 'Gagal menghapus device: ' + e.message, 'error');
     }
 }
 

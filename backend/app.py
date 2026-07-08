@@ -769,6 +769,32 @@ def rename_device(device_id: str):
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
 
+@app.route('/api/devices/<device_id>', methods=['DELETE'])
+def delete_device_permanently(device_id: str):
+    try:
+        # Hapus cache memori backend agar worker tidak mendeteksi dan mendaftarkannya lagi
+        _mqtt_live_data.pop(device_id, None)
+        _mqtt_last_seen.pop(device_id, None)
+        _db_last_ping.pop(device_id, None)
+        _device_live_hash.pop(device_id, None)
+        _device_last_change_ms.pop(device_id, None)
+        _device_is_offline.pop(device_id, None)
+        _device_live_buffer.pop(device_id, None)
+        
+        with get_db_cursor() as cur:
+            # Hapus data histori capture
+            cur.execute("DELETE FROM history WHERE device_id = %s", (device_id,))
+            # Hapus data snapshot telemetry
+            cur.execute("DELETE FROM telemetry WHERE device_id = %s", (device_id,))
+            # Hapus metadata device
+            cur.execute("DELETE FROM devices WHERE id = %s", (device_id,))
+            
+        print(f"[API] Device {device_id} deleted permanently.")
+        return jsonify({'ok': True, 'device_id': device_id})
+    except Exception as e:
+        print(f"Error in delete_device_permanently: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
 @app.route('/api/devices/<device_id>/sensors/<phase>/rename', methods=['POST'])
 def rename_sensor(device_id: str, phase: str):
     phase = phase.upper()
