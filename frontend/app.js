@@ -2410,6 +2410,8 @@ function buildSessionUI() {
         }
     });
     tbody.innerHTML = filtered.map(session => {
+        const dev2 = _deviceListCache.find(d => d.id === (session.deviceId || selectedDeviceId));
+        const liveDeviceName = dev2?.name || session.deviceName || session.deviceId;
         const frozenNames = session.phaseNames || {};
         const recordedPhaseKeys = Object.keys(recordsBySession[session.id] || {}).filter(k => /^L\d+$/.test(k));
         const backendPhaseKeys = (session.phases || []).filter(k => /^L\d+$/.test(k));
@@ -2417,16 +2419,15 @@ function buildSessionUI() {
         
         const allKeysSet = new Set([...recordedPhaseKeys, ...backendPhaseKeys, ...frozenPhaseKeys]);
         if (allKeysSet.size === 0) {
-            const dev = _deviceListCache.find(d => d.id === (session.deviceId || selectedDeviceId));
-            if (dev && dev.phases) {
-                dev.phases.filter(p => p.enabled !== false).forEach(p => allKeysSet.add(p.phase));
+            if (dev2 && dev2.phases) {
+                dev2.phases.filter(p => p.enabled !== false).forEach(p => allKeysSet.add(p.phase));
             }
         }
         const phaseSourceKeys = Array.from(allKeysSet).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
-        const dev2 = _deviceListCache.find(d => d.id === selectedDeviceId);
         const phases = phaseSourceKeys.map(ph => {
             const cachedName = dev2?.phases?.find(p => p.phase === ph)?.name;
-            return { phase: ph, name: frozenNames[ph] || cachedName || ph };
+            const displayName = cachedName || frozenNames[ph] || ph;
+            return { phase: ph, name: displayName };
         });
         const allPhaseRecords = Object.values(recordsBySession[session.id] || {}).flat();
         const isActive = session.id === currentSessionId && captureActive;
@@ -2480,23 +2481,9 @@ function buildSessionUI() {
                 </div>
                 <div id="phase-detail_${session.id}_${p.phase}" style="display:none">
                     ${(() => {
-                const loaded = recordsBySession[session.id] && recordsBySession[session.id][p.phase];
-                const pr = loaded ? loaded.slice().sort(sortByEpochDesc) : [];
                 return `<table class="data-table inner-table" style="width:100%;margin:0;border-radius:0">
                         <thead><tr><th>Timestamp</th><th>Voltage (V)</th><th>Current (A)</th><th>Power (W)</th><th>Frequency (Hz)</th><th>Energy (kWh)</th><th>PF</th></tr></thead>
-                        <tbody id="inner-tbody_${session.id}_${p.phase}">${pr.length ? pr.map(e => {
-                    const pfColor = e.offline ? '#9CA3AF' : (e.PowerFactor >= 0.85 ? '#00A651' : '#ED1C24');
-                    const offTag = e.offline ? ' <span style="color:#9CA3AF;font-size:9px;font-weight:700">[offline]</span>' : '';
-                    return '<tr class="inner-record-row"' + (e.offline ? ' style="opacity:0.5;font-style:italic"' : '') + '>'
-                        + '<td>' + e.timestamp + offTag + '</td>'
-                        + '<td>' + (e.Voltage != null ? e.Voltage.toFixed(2) : '---') + '</td>'
-                        + '<td>' + (e.Current != null ? e.Current.toFixed(2) : '---') + '</td>'
-                        + '<td>' + (e.Power != null ? e.Power.toFixed(2) : '---') + '</td>'
-                        + '<td>' + (e.Frequency != null ? e.Frequency.toFixed(2) : '---') + '</td>'
-                        + '<td>' + (e.Energy != null ? e.Energy.toFixed(3) : '---') + '</td>'
-                        + '<td style="color:' + pfColor + '">' + (e.PowerFactor != null ? e.PowerFactor.toFixed(3) : '---') + '</td>'
-                        + '</tr>';
-                }).join('') : ''}</tbody>
+                        <tbody id="inner-tbody_${session.id}_${p.phase}"></tbody>
                         </table>`;
             })()}
                 </div>
@@ -2509,7 +2496,7 @@ function buildSessionUI() {
             </td>
             <td class="session-name-cell">
                 <span class="session-name">${_highlight(session.name || 'Tanpa nama')}</span>
-                ${session.deviceName && session.deviceName !== session.deviceId ? `<span style="font-size:10px;color:var(--text-tertiary);margin-left:4px">· ${session.deviceName}</span>` : ''}
+                ${liveDeviceName && liveDeviceName !== session.deviceId ? `<span style="font-size:10px;color:var(--text-tertiary);margin-left:4px">· ${liveDeviceName}</span>` : ''}
                 ${isActive ? '<span class="session-live-badge">&#9679; LIVE</span>' : ''}
             </td>
             <td>${session.startTime || '---'}</td>
@@ -2538,6 +2525,23 @@ function buildSessionUI() {
         const detail = $(`phase-detail_${key}`), chevron = $(`chevron_${key}`);
         if (detail) detail.style.display = 'block';
         if (chevron) chevron.textContent = '\u25BC';
+        // Re-fill tbody yang menjadi kosong setelah buildSessionUI re-render HTML
+        // key = 'session_TIMESTAMP_L1' → phase = bagian terakhir, sessionId = sisanya
+        const lastUnderscore = key.lastIndexOf('_');
+        if (lastUnderscore > 0) {
+            const sessionId = key.slice(0, lastUnderscore);
+            const phase     = key.slice(lastUnderscore + 1);
+            const pageStateKey = `${sessionId}__${phase}`;
+            if (recordsBySession[sessionId]?.[phase]) {
+                const currentPage = _phasePageState[pageStateKey] || 1;
+                _goPhaseRowsPage(sessionId, phase, currentPage);
+            } else if (_activeHistoryFetches.has(pageStateKey)) {
+                const tbody = document.getElementById(`inner-tbody_${sessionId}_${phase}`);
+                if (tbody) {
+                    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:12px;color:var(--text-tertiary);font-style:italic">Memuat data...</td></tr>`;
+                }
+            }
+        }
     });
     editingPhases.forEach((inputValue, key) => {
         const viewEl = document.getElementById('sph-view_' + key);
@@ -2560,7 +2564,124 @@ function toggleSessionDetail(sessionId) {
     const isOpen = detail.style.display !== 'none';
     detail.style.display = isOpen ? 'none' : 'table-row';
     if (chevron) chevron.textContent = isOpen ? '\u25B6' : '\u25BC';
+
+    // Prefetch all phase history in the background when session is opened
+    if (!isOpen) {
+        const session = sessionsData[sessionId];
+        if (session && session.phases) {
+            session.phases.forEach(phase => {
+                _fetchPhaseHistory(sessionId, phase);
+            });
+        }
+    }
 }
+// Pagination state per session+phase: { 'sessionId__phase': currentPage }
+const _phasePageState = {};
+const _PAGE_SIZE = 50;
+
+const _activeHistoryFetches = new Set();
+const _activeHistoryCallbacks = {};
+
+function _fetchPhaseHistory(sessionId, phase, cb) {
+    if (recordsBySession[sessionId]?.[phase]) {
+        if (cb) cb(recordsBySession[sessionId][phase]);
+        return;
+    }
+    const key = `${sessionId}__${phase}`;
+    if (_activeHistoryFetches.has(key)) {
+        if (cb) {
+            if (!_activeHistoryCallbacks[key]) _activeHistoryCallbacks[key] = [];
+            _activeHistoryCallbacks[key].push(cb);
+        }
+        return;
+    }
+    _activeHistoryFetches.add(key);
+    if (cb) {
+        if (!_activeHistoryCallbacks[key]) _activeHistoryCallbacks[key] = [];
+        _activeHistoryCallbacks[key].push(cb);
+    }
+    fetch(`/api/devices/${selectedDeviceId}/history/${sessionId}/${phase}`)
+        .then(res => res.json())
+        .then(historyMap => {
+            if (!recordsBySession[sessionId]) recordsBySession[sessionId] = {};
+            const arr = [];
+            Object.entries(historyMap).forEach(([k, val]) => {
+                if (k !== '_meta') arr.push(val);
+            });
+            recordsBySession[sessionId][phase] = arr;
+            _activeHistoryFetches.delete(key);
+            const cbs = _activeHistoryCallbacks[key] || [];
+            delete _activeHistoryCallbacks[key];
+            cbs.forEach(callback => callback(arr));
+        })
+        .catch(err => {
+            console.error("Error loading phase history details:", err);
+            _activeHistoryFetches.delete(key);
+            const cbs = _activeHistoryCallbacks[key] || [];
+            delete _activeHistoryCallbacks[key];
+            cbs.forEach(callback => callback(null));
+        });
+}
+
+function _renderPhaseRow(e) {
+    const pfColor = e.offline ? '#9CA3AF' : (e.PowerFactor >= 0.85 ? '#00A651' : '#ED1C24');
+    const offTag = e.offline ? ' <span style="color:#9CA3AF;font-size:9px;font-weight:700">[offline]</span>' : '';
+    return '<tr class="inner-record-row"' + (e.offline ? ' style="opacity:0.5;font-style:italic"' : '') + '>'
+        + '<td>' + e.timestamp + offTag + '</td>'
+        + '<td>' + (e.Voltage  != null ? e.Voltage.toFixed(2)  : '---') + '</td>'
+        + '<td>' + (e.Current  != null ? e.Current.toFixed(2)  : '---') + '</td>'
+        + '<td>' + (e.Power    != null ? e.Power.toFixed(2)    : '---') + '</td>'
+        + '<td>' + (e.Frequency!= null ? e.Frequency.toFixed(2): '---') + '</td>'
+        + '<td>' + (e.Energy   != null ? e.Energy.toFixed(3)   : '---') + '</td>'
+        + '<td style="color:' + pfColor + '">' + (e.PowerFactor != null ? e.PowerFactor.toFixed(3) : '---') + '</td>'
+        + '</tr>';
+}
+
+function _renderPaginationBar(sessionId, phase, currentPage, totalPages, totalRecords) {
+    const key = `${sessionId}__${phase}`;
+    const from = (currentPage - 1) * _PAGE_SIZE + 1;
+    const to   = Math.min(currentPage * _PAGE_SIZE, totalRecords);
+    return `<tr id="pagination-bar_${key}">
+        <td colspan="7" style="padding:8px 12px;background:var(--surface-2,var(--surface));border-top:1px solid var(--border)">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+                <span style="font-size:11px;color:var(--text-tertiary)">
+                    Menampilkan <b>${from}–${to}</b> dari <b>${totalRecords}</b> record
+                </span>
+                <div style="display:flex;align-items:center;gap:6px">
+                    <button onclick="_goPhaseRowsPage('${sessionId}','${phase}',${currentPage - 1})"
+                        ${currentPage <= 1 ? 'disabled' : ''}
+                        style="padding:4px 10px;border-radius:6px;border:1.5px solid var(--border);background:var(--surface);color:var(--text-primary);cursor:${currentPage <= 1 ? 'default' : 'pointer'};font-size:12px;opacity:${currentPage <= 1 ? '0.35' : '1'}">
+                        ← Prev
+                    </button>
+                    <span style="font-size:12px;color:var(--text-secondary);font-weight:600;min-width:80px;text-align:center">
+                        Hal ${currentPage} / ${totalPages}
+                    </span>
+                    <button onclick="_goPhaseRowsPage('${sessionId}','${phase}',${currentPage + 1})"
+                        ${currentPage >= totalPages ? 'disabled' : ''}
+                        style="padding:4px 10px;border-radius:6px;border:1.5px solid var(--border);background:var(--surface);color:var(--text-primary);cursor:${currentPage >= totalPages ? 'default' : 'pointer'};font-size:12px;opacity:${currentPage >= totalPages ? '0.35' : '1'}">
+                        Next →
+                    </button>
+                </div>
+            </div>
+        </td>
+    </tr>`;
+}
+
+function _goPhaseRowsPage(sessionId, phase, page) {
+    const key = `${sessionId}__${phase}`;
+    const all = recordsBySession[sessionId]?.[phase];
+    if (!all) return;
+    const pr = all.slice().sort(sortByEpochDesc);
+    const totalPages = Math.ceil(pr.length / _PAGE_SIZE);
+    const p = Math.max(1, Math.min(page, totalPages));
+    _phasePageState[key] = p;
+    const slice = pr.slice((p - 1) * _PAGE_SIZE, p * _PAGE_SIZE);
+    const tbody = document.getElementById(`inner-tbody_${sessionId}_${phase}`);
+    if (!tbody) return;
+    tbody.innerHTML = slice.map(_renderPhaseRow).join('')
+        + (totalPages > 1 ? _renderPaginationBar(sessionId, phase, p, totalPages, pr.length) : '');
+}
+
 function togglePhaseDetails(sessionId, phase) {
     const detail = $(`phase-detail_${sessionId}_${phase}`), chevron = $(`chevron_${sessionId}_${phase}`);
     if (!detail) return;
@@ -2568,42 +2689,27 @@ function togglePhaseDetails(sessionId, phase) {
     if (!isOpen) {
         detail.style.display = 'block';
         if (chevron) chevron.textContent = '▼';
-        fetch(`/api/devices/${selectedDeviceId}/history/${sessionId}/${phase}`)
-            .then(res => res.json())
-            .then(historyMap => {
-                if (!recordsBySession[sessionId]) recordsBySession[sessionId] = {};
-                const arr = [];
-                Object.entries(historyMap).forEach(([key, val]) => {
-                    if (key !== '_meta') arr.push(val);
-                });
-                recordsBySession[sessionId][phase] = arr;
+        
+        const tbody = document.getElementById(`inner-tbody_${sessionId}_${phase}`);
+        // Jika data belum ada di cache, tampilkan info memuat data
+        if (tbody && !recordsBySession[sessionId]?.[phase]) {
+            tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:12px;color:var(--text-tertiary);font-style:italic">Memuat data...</td></tr>`;
+        }
 
-                const tbody = document.getElementById(`inner-tbody_${sessionId}_${phase}`);
-                if (tbody) {
-                    const pr = arr.slice().sort(sortByEpochDesc);
-                    tbody.innerHTML = pr.length ? pr.map(e => {
-                        const pfColor = e.offline ? '#9CA3AF' : (e.PowerFactor >= 0.85 ? '#00A651' : '#ED1C24');
-                        const offTag = e.offline ? ' <span style="color:#9CA3AF;font-size:9px;font-weight:700">[offline]</span>' : '';
-                        return '<tr class="inner-record-row"' + (e.offline ? ' style="opacity:0.5;font-style:italic"' : '') + '>'
-                            + '<td>' + e.timestamp + offTag + '</td>'
-                            + '<td>' + (e.Voltage != null ? e.Voltage.toFixed(2) : '---') + '</td>'
-                            + '<td>' + (e.Current != null ? e.Current.toFixed(2) : '---') + '</td>'
-                            + '<td>' + (e.Power != null ? e.Power.toFixed(2) : '---') + '</td>'
-                            + '<td>' + (e.Frequency != null ? e.Frequency.toFixed(2) : '---') + '</td>'
-                            + '<td>' + (e.Energy != null ? e.Energy.toFixed(3) : '---') + '</td>'
-                            + '<td style="color:' + pfColor + '">' + (e.PowerFactor != null ? e.PowerFactor.toFixed(3) : '---') + '</td>'
-                            + '</tr>';
-                    }).join('') : '';
-
-                } else {
-                    buildSessionUI();
-                }
-            })
-            .catch(err => console.error("Error loading phase history details:", err));
+        _fetchPhaseHistory(sessionId, phase, (data) => {
+            if (data) {
+                _goPhaseRowsPage(sessionId, phase, _phasePageState[`${sessionId}__${phase}`] || 1);
+            } else {
+                if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:12px;color:var(--red)">Gagal memuat data.</td></tr>`;
+            }
+        });
     } else {
         detail.style.display = 'none';
         if (chevron) chevron.textContent = '▶';
     }
+}
+function _loadAllPhaseRows(sessionId, phase) {
+    _goPhaseRowsPage(sessionId, phase, 1);
 }
 (function _injectSphHoverStyle() {
     if (document.getElementById('sph-hover-style')) return;
@@ -2664,15 +2770,15 @@ async function saveRenameSessionPhase(sessionId, phase) {
         sessionsData[sessionId].phaseNames[phase] = newName;
     }
     try {
-        const res = await fetch(`/api/devices/${selectedDeviceId}/sensors/${phase}/rename`, {
+        const res = await fetch(`/api/capture/rename-session-sensor`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: newName })
+            body: JSON.stringify({ sessionId: sessionId, phase: phase, name: newName })
         });
         const json = await res.json();
         if (!json.ok) throw new Error(json.error || 'Server error');
 
-        await showModal('Berhasil', `Nama sensor ${phase} diubah menjadi:\n"${newName}"`, 'success');
+        await showModal('Berhasil', `Nama sensor ${phase} pada sesi ini diubah menjadi:\n"${newName}"`, 'success');
     } catch (e) {
         if (labelEl) labelEl.textContent = oldName;
         if (sessionsData[sessionId]?.phaseNames) {
@@ -2749,9 +2855,11 @@ async function exportSession(sessionId, sessionName, event) {
         const deviceName = session?.deviceName || _deviceListCache.find(d => d.id === (session?.deviceId || selectedDeviceId))?.name || selectedDeviceId;
         const wb = XLSX.utils.book_new();
         const frozenNames = session.phaseNames || {};
+        const devObj = _deviceListCache.find(d => d.id === (session?.deviceId || selectedDeviceId));
         for (const phase of phaseKeys) {
             const phaseRecs = (phaseData[phase] || []).slice().sort(sortByEpochAsc);
-            const phaseDevName = frozenNames[phase] || phase;
+            const cachedName = devObj?.phases?.find(p => p.phase === phase)?.name;
+            const phaseDevName = (frozenNames[phase] && frozenNames[phase] !== phase) ? frozenNames[phase] : (cachedName || phase);
             const ws = XLSX.utils.json_to_sheet(phaseRecs.map(e => _buildExcelRow(e, deviceName)));
             ws['!cols'] = COL_WIDTHS;
             XLSX.utils.book_append_sheet(wb, ws, phaseDevName);
@@ -2763,7 +2871,10 @@ async function exportSession(sessionId, sessionName, event) {
         const wsMeta = XLSX.utils.aoa_to_sheet([
             ['Smart Energy Monitor - Session Export'], [''],
             ['Nama Sesi', sessionName], ['Export Date', new Date().toLocaleString('id-ID')],
-            ['Device Name', deviceName], ['Sensors', phaseKeys.join(', ')],
+            ['Device Name', deviceName], ['Sensors', phaseKeys.map(ph => {
+                const cachedName = devObj?.phases?.find(p => p.phase === ph)?.name;
+                return (frozenNames[ph] && frozenNames[ph] !== ph) ? frozenNames[ph] : (cachedName || ph);
+            }).join(', ')],
             ['Waktu Mulai', session?.startTime || '---'], ['Waktu Selesai', session?.endTime || 'Berlangsung'],
             ['Total Records', totalRecords], ['Records Online', onlineRows.length], ['Records Offline', allRecords.length - onlineRows.length], [''],
             ['Summary Statistics (semua sensor, online saja)'], [''],
@@ -2894,9 +3005,13 @@ async function syncCaptureStatus() {
                     }
                 }
             } else if (!status.finalizing) {
+                const wasActive = captureActive;
                 captureActive = false;
                 currentSessionId = null;
                 _updateCaptureButtonUI(false);
+                if (wasActive && selectedDeviceId) {
+                    _attachHistoryListener(selectedDeviceId);
+                }
             }
         }
         if (!_captureTransitioning && !_intervalUserEdited) {
@@ -2921,8 +3036,6 @@ async function syncCaptureStatus() {
                 buildSessionUI(); // render ulang dengan recordCount terbaru dari status
             }
             await _refreshActiveSessionRecords();
-        } else {
-            buildSessionUI();
         }
     } catch (e) { }
 }
@@ -2969,6 +3082,9 @@ async function _apiStopCapture() {
             .then(r => r.json());
         if (!json.ok) {
             await showModal('Error', 'Gagal menghentikan: ' + json.error, 'error');
+        }
+        if (selectedDeviceId) {
+            await _attachHistoryListener(selectedDeviceId);
         }
     } catch (e) {
         await showModal('Error', 'Network error: ' + e.message, 'error');

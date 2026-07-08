@@ -191,9 +191,11 @@ def init_db():
                             power_factor FLOAT DEFAULT 0.0,
                             offline BOOLEAN DEFAULT FALSE,
                             session_id VARCHAR(50) NOT NULL,
-                            session_name VARCHAR(100) DEFAULT NULL
+                            session_name VARCHAR(100) DEFAULT NULL,
+                            phase_name VARCHAR(100) DEFAULT NULL
                         );
                     """)
+                    cur.execute("ALTER TABLE history ADD COLUMN IF NOT EXISTS phase_name VARCHAR(100) DEFAULT NULL;")
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_device_epoch ON telemetry(device_id, epoch);")
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_device_phase ON telemetry(device_id, phase);")
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_history_session ON history(session_id);")
@@ -316,8 +318,38 @@ _capture_state = {
 }
 def _data_hash(raw): return hashlib.md5(json.dumps(raw, sort_keys=True).encode()).hexdigest() if raw else None
 _hourly_stop = threading.Event()
-_TELEMETRY_PHASES = ['L1', 'L2', 'L3', 'L4', 'L5']  # Selalu simpan 5 phase ini
 _last_write_per_device: dict[str, str] = {}  # guard duplikat per device
+
+def _get_telemetry_phases(device_id: str, raw: dict) -> list[str]:
+    """Dapatkan daftar phase yang harus di-snapshot untuk device ini.
+    Prioritas: sensor terdaftar di DB → MQTT live data → fallback L1–L5.
+    Selalu mencakup semua phase yang ada di MQTT agar L6–L10 tersimpan."""
+    phases: set[str] = set()
+
+    # 1. Phase dari MQTT live data (paling aktual)
+    for k in raw:
+        if _PHASE_RE.match(k):
+            phases.add(k)
+
+    # 2. Phase dari sensor yang terdaftar di DB (termasuk yang mungkin sedang offline)
+    try:
+        with get_db_cursor() as cur:
+            cur.execute("SELECT sensors FROM devices WHERE id = %s", (device_id,))
+            row = cur.fetchone()
+        if row and row[0]:
+            sensors_list = row[0] if isinstance(row[0], list) else json.loads(row[0])
+            for s in sensors_list:
+                ph = s.get('phase', '')
+                if ph and _PHASE_RE.match(ph):
+                    phases.add(ph)
+    except Exception:
+        pass
+
+    # 3. Fallback minimal jika tidak ada data sama sekali
+    if not phases:
+        phases = {'L1', 'L2', 'L3', 'L4', 'L5'}
+
+    return sorted(phases, key=lambda x: int(x[1:]))
 
 def _do_hourly_capture_device(device_id: str) -> None:
     try:
@@ -338,10 +370,12 @@ def _do_hourly_capture_device(device_id: str) -> None:
         raw            = _mqtt_live_data.get(device_id) or {}
         device_offline = time.time() - _mqtt_last_seen.get(device_id, 0) > 60
 
-        print(f"[Telemetry] Snapshot {device_id} slot={ts} offline={device_offline}")
+        # Deteksi phase secara dinamis — mendukung L6–L10 dan seterusnya
+        telemetry_phases = _get_telemetry_phases(device_id, raw)
+        print(f"[Telemetry] Snapshot {device_id} slot={ts} offline={device_offline} phases={telemetry_phases}")
 
         with get_db_cursor() as cur:
-            for ph in _TELEMETRY_PHASES:
+            for ph in telemetry_phases:
                 pd = raw.get(ph) or {}  # {} jika phase belum ada data → semua nilai 0
                 phase_offline = device_offline or not bool(pd)
 
@@ -563,6 +597,7 @@ def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_ch
         
         with _capture_lock:
             sname = _capture_state.get('session_name') or 'Rekaman'
+            sensor_names = _capture_state.get('sensor_names') or {}
             
         phases = enabled_phases if enabled_phases else sorted([k for k in (raw or {}) if _PHASE_RE.match(k)], key=lambda x: int(x[1:]))
         if not phases: return
@@ -578,13 +613,13 @@ def _do_capture_io(device_id, session_id, sched_ts, interval, last_hash, last_ch
                     INSERT INTO history (
                         device_id, phase, timestamp, epoch,
                         voltage, current, power, frequency, energy, power_factor,
-                        offline, session_id, session_name
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        offline, session_id, session_name, phase_name
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     device_id, ph, ts, epoch_val,
                     f('Voltage (V)'), f('Current (A)'), f('Power (W)'),
                     f('Frequency (Hz)'), f('Active Energy (kWh)'), f('Power Factor'),
-                    phase_offline, session_id, sname
+                    phase_offline, session_id, sname, sensor_names.get(ph, ph)
                 ))
                 
         with _capture_lock:
@@ -847,10 +882,27 @@ def capture_start():
             return jsonify({'ok': False, 'error': 'Capture sudah berjalan atau sedang finalisasi'}), 409
         sid    = f'session_{int(time.time() * 1000)}'
         now_s  = _ts_now()
+        # Ambil nama sensor terdaftar di DB saat capture dimulai
+        sensor_names = {}
+        try:
+            with get_db_cursor() as cur:
+                cur.execute("SELECT sensors FROM devices WHERE id = %s", (did,))
+                row = cur.fetchone()
+                if row and row[0]:
+                    sensors_list = row[0] if isinstance(row[0], list) else json.loads(row[0])
+                    for s in sensors_list:
+                        ph = s.get('phase')
+                        nm = s.get('name')
+                        if ph and nm:
+                            sensor_names[ph] = nm
+        except Exception:
+            pass
+
         _capture_state.update({
             'active': True, 'device_id': did, 'device_name': dname or did,
             'session_id': sid, 'session_name': sname, 'interval': iv,
             'count': 0, 'started_at': now_s, 'enabled_phases': hints, 'time_offset_ms': 0,
+            'sensor_names': sensor_names,
         })
         if _mqtt_client:
             try:
@@ -931,7 +983,7 @@ def get_sessions(device_id: str):
             """, (device_id,))
             rows = cur.fetchall()
 
-        # Ambil nama device
+        # Ambil nama device dari database
         device_name = device_id
         try:
             with get_db_cursor() as cur:
@@ -939,6 +991,24 @@ def get_sessions(device_id: str):
                 dev_row = cur.fetchone()
                 if dev_row:
                     device_name = dev_row[0]
+        except Exception:
+            pass
+
+        # Ambil nama kustom sensor yang direkam pada history (terisolasi per session)
+        session_phase_names = {}
+        try:
+            with get_db_cursor() as cur:
+                cur.execute("""
+                    SELECT session_id, phase, MAX(phase_name)
+                    FROM history
+                    WHERE device_id = %s
+                    GROUP BY session_id, phase
+                """, (device_id,))
+                hist_phases = cur.fetchall()
+            for sid, ph, ph_name in hist_phases:
+                if sid not in session_phase_names:
+                    session_phase_names[sid] = {}
+                session_phase_names[sid][ph] = ph_name or ph
         except Exception:
             pass
 
@@ -957,7 +1027,7 @@ def get_sessions(device_id: str):
                 'deviceId': device_id,
                 'deviceName': device_name,
                 'phases': phases_list,           # ['L1', 'L2', 'L3']
-                'phaseNames': {ph: ph for ph in phases_list},  # default name = phase key
+                'phaseNames': session_phase_names.get(sid, {ph: ph for ph in phases_list}),
             })
         return jsonify(sessions)
     except Exception as e:
@@ -1046,6 +1116,25 @@ def rename_session():
                 SET session_name = %s
                 WHERE session_id = %s
             """, (name, sid))
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+@app.route('/api/capture/rename-session-sensor', methods=['POST'])
+def rename_session_sensor():
+    body = request.get_json(silent=True) or {}
+    sid = body.get('sessionId')
+    phase = body.get('phase')
+    name = (body.get('name') or '').strip()
+    if not sid or not phase or not name:
+        return jsonify({'ok': False, 'error': 'Invalid parameters'}), 400
+    try:
+        with get_db_cursor() as cur:
+            cur.execute("""
+                UPDATE history
+                SET phase_name = %s
+                WHERE session_id = %s AND phase = %s
+            """, (name, sid, phase.upper()))
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
