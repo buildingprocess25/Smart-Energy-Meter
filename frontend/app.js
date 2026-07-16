@@ -1834,7 +1834,7 @@ function renderDeviceList(devices) {
                 </div>
                 <div style="display:flex;gap:4px">
                     <button class="device-edit-btn" onclick="startRenameDevice('${d.id}')" title="Ubah nama">${editSVG}</button>
-                    <button class="device-delete-btn" onclick="deleteDevice('${d.id}', '${d.name || d.id}')" title="Hapus device" style="background:none;border:none;color:var(--text-tertiary);cursor:pointer;padding:4px;display:flex;align-items:center;justify-content:center;transition:color .2s" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text-tertiary)'">${deleteSVG}</button>
+                    <button class="device-delete-btn" onclick="deleteDevice('${d.id}', '${d.name || d.id}')" title="Hapus device" style="background:none;border:none;color:var(--text-tertiary);cursor:pointer;padding:4px;display:flex;align-items:center;justify-content:center;transition:color .2s" onmouseover="this.style.color='var(--destructive)'" onmouseout="this.style.color='var(--text-tertiary)'">${deleteSVG}</button>
                 </div>
             </div>
             <div class="device-edit-mode" id="edit_${d.id}" style="display:none">
@@ -2749,7 +2749,7 @@ function togglePhaseDetails(sessionId, phase) {
             if (data) {
                 _goPhaseRowsPage(sessionId, phase, _phasePageState[`${sessionId}__${phase}`] || 1);
             } else {
-                if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:12px;color:var(--red)">Gagal memuat data.</td></tr>`;
+                if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:12px;color:var(--destructive)">Gagal memuat data.</td></tr>`;
             }
         });
     } else {
