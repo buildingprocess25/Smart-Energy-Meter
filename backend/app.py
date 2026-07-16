@@ -120,8 +120,8 @@ def _start_mqtt():
         print(f"MQTT init failed: {e}")
         return None
 
-_mqtt_client = _start_mqtt()
 app = Flask(__name__, template_folder='../frontend', static_folder='../frontend', static_url_path='')
+_mqtt_client = _start_mqtt() if (not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true") else None
 _PHASE_RE = re.compile(r'^L\d+$')
 def _detect_phases(device_data: dict) -> list[str]:
     keys: set[str] = set()
@@ -426,7 +426,8 @@ def _hourly_worker() -> None:
             break
         _do_hourly_capture_all()
 
-threading.Thread(target=_hourly_worker, daemon=True).start()
+if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    threading.Thread(target=_hourly_worker, daemon=True).start()
 
 _device_live_hash = {}
 _device_last_change_ms = {}
@@ -466,7 +467,7 @@ def _live_buffer_worker() -> None:
                         _device_live_buffer[did].append({'timestamp': now_ms, 'data': {"offline": True}})
 
                     meta = devices_meta.get(did)
-                    if not meta or meta['online'] != False:
+                    if meta and meta['online'] != False:
                         offline_updates.append(did)
                 else:
                     h = _data_hash(raw)
@@ -504,7 +505,8 @@ def _live_buffer_worker() -> None:
             print(f"Error in _live_buffer_worker: {e}")
         time.sleep(3)
 
-threading.Thread(target=_live_buffer_worker, daemon=True).start()
+if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    threading.Thread(target=_live_buffer_worker, daemon=True).start()
 
 def _init_db_defaults():
     try:
@@ -524,7 +526,8 @@ def _init_db_defaults():
     except Exception as e:
         print(f"Error in _init_db_defaults: {e}")
 
-threading.Thread(target=_init_db_defaults, daemon=True).start()
+if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    threading.Thread(target=_init_db_defaults, daemon=True).start()
 
 @app.route('/api/live-buffer/<device_id>')
 def get_live_buffer(device_id: str):

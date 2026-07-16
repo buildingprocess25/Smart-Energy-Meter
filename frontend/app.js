@@ -1740,11 +1740,11 @@ async function loadDevices() {
         const initialLoad = !selectedDeviceId;
         if (initialLoad) {
             selectedDeviceId = visible[0].id;
-            selectedDeviceName = visible[0].name || visible[0].id;
+            selectedDeviceName = visible[0].name && visible[0].name !== visible[0].id ? `${visible[0].id} ${visible[0].name}` : visible[0].id;
         }
         const activeDev = visible.find(d => d.id === selectedDeviceId);
         if (!initialLoad && activeDev) {
-            selectedDeviceName = activeDev.name || activeDev.id;
+            selectedDeviceName = activeDev.name && activeDev.name !== activeDev.id ? `${activeDev.id} ${activeDev.name}` : activeDev.id;
         }
 
         if (initialLoad && activeDev) {
@@ -1770,9 +1770,10 @@ function _populateDeviceSelect(devices) {
     const selects = [DOM.deviceSelect, DOM.summaryDeviceSelect].filter(Boolean);
     if (!selects.length) return;
     const currentVal = DOM.deviceSelect?.value || DOM.summaryDeviceSelect?.value || selectedDeviceId;
-    const html = devices.map(d =>
-        `<option value="${d.id}"${d.id === currentVal ? ' selected' : ''}>${d.name || d.id}</option>`
-    ).join('');
+    const html = devices.map(d => {
+        const displayName = d.name && d.name !== d.id ? `${d.id} ${d.name}` : d.id;
+        return `<option value="${d.id}"${d.id === currentVal ? ' selected' : ''}>${displayName}</option>`;
+    }).join('');
     selects.forEach(sel => sel.innerHTML = html);
 }
 function renderDeviceList(devices) {
@@ -1822,19 +1823,21 @@ function renderDeviceList(devices) {
             </div>`;
             }).join('')
             : '<p style="font-size:11px;color:var(--text-tertiary);padding:4px 0">Mendeteksi phase…</p>';
+        const displayName = d.name && d.name !== d.id ? `${d.id} ${d.name}` : d.id;
+        const renameValue = d.name === d.id ? '' : d.name;
         return `
         <div class="device-item" id="device-item_${d.id}">
             <div class="device-view-mode" id="view_${d.id}">
                 <div class="device-item-info">
                     <span class="device-online-dot ${dotClass}"></span>
                     <div>
-                        <p class="device-item-name" id="label_${d.id}">${d.name || d.id}</p>
+                        <p class="device-item-name" id="label_${d.id}">${displayName}</p>
                         <p class="device-item-id">${d.phaseCount || 0} Sensor · Last seen: ${d.lastSeen || '---'}</p>
                     </div>
                 </div>
                 <div style="display:flex;gap:4px">
                     <button class="device-edit-btn" onclick="startRenameDevice('${d.id}')" title="Ubah nama">${editSVG}</button>
-                    <button class="device-delete-btn" onclick="deleteDevice('${d.id}', '${d.name || d.id}')" title="Hapus device" style="background:none;border:none;color:var(--text-tertiary);cursor:pointer;padding:4px;display:flex;align-items:center;justify-content:center;transition:color .2s" onmouseover="this.style.color='var(--destructive)'" onmouseout="this.style.color='var(--text-tertiary)'">${deleteSVG}</button>
+                    <button class="device-delete-btn" onclick="deleteDevice('${d.id}', '${_escapeAttr(displayName)}')" title="Hapus device" style="background:none;border:none;color:var(--text-tertiary);cursor:pointer;padding:4px;display:flex;align-items:center;justify-content:center;transition:color .2s" onmouseover="this.style.color='var(--destructive)'" onmouseout="this.style.color='var(--text-tertiary)'">${deleteSVG}</button>
                 </div>
             </div>
             <div class="device-edit-mode" id="edit_${d.id}" style="display:none">
@@ -1842,7 +1845,7 @@ function renderDeviceList(devices) {
                     <span class="device-online-dot ${dotClass}"></span>
                     <div class="device-edit-field">
                         <input type="text" class="device-rename-input-inline" id="rename_${d.id}"
-                            value="${d.name || d.id}" maxlength="40" autocomplete="off"
+                            value="${renameValue}" placeholder="Nama Lokasi / Toko..." maxlength="40" autocomplete="off"
                             onkeydown="if(event.key==='Enter') saveDeviceName('${d.id}'); else if(event.key==='Escape') cancelRenameDevice('${d.id}')">
                         <p class="device-edit-hint"><kbd>Enter</kbd> simpan &nbsp;·&nbsp; <kbd>Esc</kbd> batal</p>
                     </div>
@@ -1881,12 +1884,15 @@ async function saveDeviceName(deviceId) {
     const oldName = _deviceListCache.find(d => d.id === deviceId)?.name || deviceId;
     const dev = _deviceListCache.find(d => d.id === deviceId);
     if (dev) dev.name = newName;
+    
     const label = $(`label_${deviceId}`);
-    if (label) label.textContent = newName;
+    const displayNewName = newName && newName !== deviceId ? `${deviceId} ${newName}` : deviceId;
+    if (label) label.textContent = displayNewName;
+    
     if (deviceId === selectedDeviceId) {
-        selectedDeviceName = newName;
+        selectedDeviceName = displayNewName;
         [DOM.deviceSelect, DOM.summaryDeviceSelect].forEach(sel => {
-            if (sel) Array.from(sel.options).forEach(opt => { if (opt.value === deviceId) opt.text = newName; });
+            if (sel) Array.from(sel.options).forEach(opt => { if (opt.value === deviceId) opt.text = displayNewName; });
         });
     }
     _renamingDeviceId = null;
@@ -1905,11 +1911,12 @@ async function saveDeviceName(deviceId) {
         if (!json.ok) throw new Error(json.error || 'Gagal menyimpan ke database');
     } catch (e) {
         if (dev) dev.name = oldName;
-        if (label) label.textContent = oldName;
+        const displayOldName = oldName && oldName !== deviceId ? `${deviceId} ${oldName}` : deviceId;
+        if (label) label.textContent = displayOldName;
         if (deviceId === selectedDeviceId) {
-            selectedDeviceName = oldName;
+            selectedDeviceName = displayOldName;
             [DOM.deviceSelect, DOM.summaryDeviceSelect].forEach(sel => {
-                if (sel) Array.from(sel.options).forEach(opt => { if (opt.value === deviceId) opt.text = oldName; });
+                if (sel) Array.from(sel.options).forEach(opt => { if (opt.value === displayOldName) opt.text = displayOldName; });
             });
         }
         closeModal();
@@ -2014,7 +2021,8 @@ async function onDeviceChange(deviceId) {
     }
     if (_chartTimer) { clearInterval(_chartTimer); _chartTimer = null; }
     selectedDeviceId = deviceId;
-    selectedDeviceName = _deviceListCache.find(d => d.id === deviceId)?.name || deviceId;
+    const activeDev = _deviceListCache.find(d => d.id === deviceId);
+    selectedDeviceName = activeDev && activeDev.name && activeDev.name !== activeDev.id ? `${activeDev.id} ${activeDev.name}` : deviceId;
     selectedPhase = '';
     updatePhaseSelector([]);
     resetChartData();
@@ -2046,7 +2054,6 @@ async function onDeviceChange(deviceId) {
     _attachPhasesListener(deviceId);
     _attachHourlyListener(deviceId);
     _attachDayListener(deviceId);
-    const activeDev = _deviceListCache.find(d => d.id === deviceId);
     if (activeDev) renderDeviceList([activeDev]);
 }
 function startRenamePhase(deviceId, phase) {
