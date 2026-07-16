@@ -26,3 +26,11 @@ node_modules/
 # IDE/Editor
 .vscode/
 .idea/
+
+# AI Agent rules, instructions, and plans
+.agents/
+.cursorrules
+*AGENTS.md
+task.md
+implementation_plan.md
+walkthrough.md
