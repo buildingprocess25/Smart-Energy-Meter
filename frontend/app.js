@@ -375,7 +375,7 @@ function getPhaseDisplayData(raw, phase) {
         _phases: [phase],
     };
 }
-function setPhase(phase) {
+function setPhase(phase, resetToggles = true) {
     selectedPhase = phase;
     document.querySelectorAll('.phase-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.phase === phase);
@@ -386,14 +386,16 @@ function setPhase(phase) {
         else updateDisplayCardsBlank();
     }
 
-    // Sembunyikan semua sensor di chart kecuali yang sedang aktif dipilih
-    _hiddenPhases.clear();
-    const enabledKeys = _getEnabledPhaseKeys();
-    enabledKeys.forEach(k => {
-        if (k !== phase) {
-            _hiddenPhases.add(k);
-        }
-    });
+    if (resetToggles) {
+        // Sembunyikan semua sensor di chart kecuali yang sedang aktif dipilih
+        _hiddenPhases.clear();
+        const enabledKeys = _getEnabledPhaseKeys();
+        enabledKeys.forEach(k => {
+            if (k !== phase) {
+                _hiddenPhases.add(k);
+            }
+        });
+    }
 
     if (typeof renderPhaseToggles === 'function') {
         renderPhaseToggles();
@@ -430,7 +432,7 @@ function updatePhaseSelector(phases) {
         return `<button class="phase-btn${selectedPhase === p ? ' active' : ''}" data-phase="${p}" onclick="setPhase('${p}')">${label}</button>`;
     }).join('');
     if (selectedPhase) {
-        setPhase(selectedPhase);
+        setPhase(selectedPhase, false);
     } else {
         if (typeof renderPhaseToggles === 'function') renderPhaseToggles();
     }
@@ -1756,10 +1758,14 @@ async function loadDevices() {
         }
 
         if (activeDev) {
-            renderDeviceList([activeDev]);
-            if (activeDev.phases?.length) {
-                const enabledPhases = activeDev.phases.filter(p => p.enabled !== false).map(p => p.phase);
-                updatePhaseSelector(enabledPhases);
+            const isEditing = Array.from(document.querySelectorAll('.device-edit-mode, .device-phase-edit'))
+                .some(el => el.style.display === 'flex' || el.style.display === 'block');
+            if (!isEditing) {
+                renderDeviceList([activeDev]);
+                if (activeDev.phases?.length) {
+                    const enabledPhases = activeDev.phases.filter(p => p.enabled !== false).map(p => p.phase);
+                    updatePhaseSelector(enabledPhases);
+                }
             }
         } else {
             renderDeviceList([]);
