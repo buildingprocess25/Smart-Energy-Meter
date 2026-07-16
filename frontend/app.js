@@ -2374,7 +2374,8 @@ function checkDataFreshness() {
             isConnected = false; realtimeData = null; rawRealtimeData = null;
             updateConnectionStatus(false);
         }
-    } else if (lastDataTimestamp === 0 && (now - connectionStartTime > 60000)) {
+    } else if (lastDataTimestamp === 0 && (now - connectionStartTime > 10000)) {
+        isConnected = false;
         updateConnectionStatus(false);
     }
 }
