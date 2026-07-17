@@ -62,11 +62,18 @@ Ada **dua cara**. Pilih salah satu:
 
 **Prasyarat:** Python 3.11+, sudah punya akses ke PostgreSQL & MQTT broker.
 
-```powershell
-# 1. Aktifkan virtual environment (sudah ada folder .venv di project)
-.venv\Scripts\activate
+# 1. Aktifkan virtual environment (sesuaikan dengan terminal Anda):
+# Di PowerShell:
+.venv\Scripts\Activate.ps1
+# (Jika muncul error permission di PowerShell, jalankan ini dulu: Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process)
 
-# 2. Install dependensi (cukup sekali, atau kalau requirements.txt berubah)
+# Di Command Prompt (CMD):
+.venv\Scripts\activate.bat
+
+# Di Git Bash:
+source .venv/Scripts/activate
+
+# 2. Install dependensi (cukup sekali, atau jika requirements.txt berubah)
 pip install -r backend/requirements.txt
 
 # 3. Pastikan file .env sudah ada di root folder (lihat bagian Konfigurasi di bawah)

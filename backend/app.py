@@ -38,6 +38,8 @@ _ESP32_JSON_MAP = {
 
 def _on_message(client, userdata, msg):
     try:
+        if msg.retain:
+            return
         topic = msg.topic
         payload = msg.payload.decode('utf-8')
         parts = topic.split('/')
@@ -509,22 +511,7 @@ if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
     threading.Thread(target=_live_buffer_worker, daemon=True).start()
 
 def _init_db_defaults():
-    try:
-        with get_db_cursor() as cur:
-            cur.execute("SELECT id FROM devices WHERE id = 'alat1'")
-            row = cur.fetchone()
-            if not row:
-                default_sensors = [
-                    {"phase": "L1", "name": "Sensor 1", "enabled": True},
-                    {"phase": "L2", "name": "Sensor 2", "enabled": True},
-                    {"phase": "L3", "name": "Sensor 3", "enabled": True}
-                ]
-                cur.execute("""
-                    INSERT INTO devices (id, name, online, last_seen, sensors)
-                    VALUES ('alat1', 'Energy Meter Alat 1', FALSE, '---', %s)
-                """, (json.dumps(default_sensors),))
-    except Exception as e:
-        print(f"Error in _init_db_defaults: {e}")
+    pass
 
 if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
     threading.Thread(target=_init_db_defaults, daemon=True).start()

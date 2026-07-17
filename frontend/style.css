@@ -680,6 +680,20 @@ mark.search-highlight { background: rgba(187,23,36,0.12); color: var(--brand); b
 .device-item:hover .device-edit-btn { opacity: 1; transform: scale(1); color: var(--brand); border-color: rgba(187,23,36,0.25); background: var(--brand-muted); }
 .device-edit-btn:hover  { background: rgba(187,23,36,0.16) !important; border-color: var(--brand) !important; }
 .device-edit-btn:active { transform: scale(0.9) !important; }
+
+.device-delete-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px;
+    border-radius: 0 .375rem 0 .375rem;
+    border: 1.5px solid transparent; background: transparent;
+    color: var(--text-tertiary); cursor: pointer; flex-shrink: 0;
+    opacity: 0; transform: scale(0.8);
+    transition: opacity 0.15s ease, transform 0.15s ease, color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.device-delete-btn svg { width: 13px; height: 13px; pointer-events: none; }
+.device-item:hover .device-delete-btn { opacity: 1; transform: scale(1); color: var(--text-tertiary); border-color: rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); }
+.device-delete-btn:hover  { background: rgba(220,53,69,0.16) !important; border-color: var(--destructive) !important; color: var(--destructive) !important; }
+.device-delete-btn:active { transform: scale(0.9) !important; }
 .device-edit-mode {
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 14px; gap: 10px;
