@@ -2468,38 +2468,11 @@ function buildSessionUI() {
         return;
     }
     const openSessions = new Set();
-    const openPhases = new Set();
     document.querySelectorAll('.session-detail-row').forEach(row => { if (row.style.display !== 'none') openSessions.add(row.id.replace('detail_', '')); });
-    document.querySelectorAll('[id^="phase-detail_"]').forEach(el => { if (el.style.display !== 'none') openPhases.add(el.id.replace('phase-detail_', '')); });
-    const editingPhases = new Map();
-    document.querySelectorAll('[id^="sph-edit_"]').forEach(el => {
-        if (el.style.display !== 'none') {
-            const key = el.id.replace('sph-edit_', '');
-            const inputEl = document.getElementById('sph-input_' + key);
-            editingPhases.set(key, inputEl ? inputEl.value : '');
-        }
-    });
+    
     tbody.innerHTML = filtered.map(session => {
         const dev2 = _deviceListCache.find(d => d.id === (session.deviceId || selectedDeviceId));
         const liveDeviceName = dev2?.name || session.deviceName || session.deviceId;
-        const frozenNames = session.phaseNames || {};
-        const recordedPhaseKeys = Object.keys(recordsBySession[session.id] || {}).filter(k => /^L\d+$/.test(k));
-        const backendPhaseKeys = (session.phases || []).filter(k => /^L\d+$/.test(k));
-        const frozenPhaseKeys = Object.keys(frozenNames).filter(k => /^L\d+$/.test(k));
-        
-        const allKeysSet = new Set([...recordedPhaseKeys, ...backendPhaseKeys, ...frozenPhaseKeys]);
-        if (allKeysSet.size === 0) {
-            if (dev2 && dev2.phases) {
-                dev2.phases.filter(p => p.enabled !== false).forEach(p => allKeysSet.add(p.phase));
-            }
-        }
-        const phaseSourceKeys = Array.from(allKeysSet).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
-        const phases = phaseSourceKeys.map(ph => {
-            const cachedName = dev2?.phases?.find(p => p.phase === ph)?.name;
-            const displayName = cachedName || frozenNames[ph] || ph;
-            return { phase: ph, name: displayName };
-        });
-        const allPhaseRecords = Object.values(recordsBySession[session.id] || {}).flat();
         const isActive = session.id === currentSessionId && captureActive;
         let actionBtns = '';
         if (isActive) {
@@ -2547,50 +2520,7 @@ function buildSessionUI() {
                 </div>
             </div>`;
         }
-        const phaseBlocks = phases.map(p => `
-            <div class="session-phase-block" id="phase-block_${session.id}_${p.phase}">
-                <div class="session-phase-header" id="sph-view_${session.id}_${p.phase}"
-                    style="display:flex;gap:12px;align-items:center;padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--border);cursor:pointer;user-select:none"
-                    onclick="togglePhaseDetails('${session.id}','${p.phase}')">
-                    <span id="chevron_${session.id}_${p.phase}" style="font-size:11px;color:var(--text-tertiary)">▶</span>
-                    <span style="display:inline-flex;width:26px;height:26px;background:var(--blue);color:white;border-radius:6px;align-items:center;justify-content:center;font-weight:700;font-size:11px">${p.phase}</span>
-                    <span id="sph-label_${session.id}_${p.phase}" style="flex:1;font-size:13px;font-weight:600;color:var(--text-primary)">${p.name}</span>
-                    ${!isActive ? `<button class="sph-edit-btn" title="Ubah nama sensor"
-                        onclick="event.stopPropagation();startRenameSessionPhase('${session.id}','${p.phase}')"
-                        style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;border:1.5px solid transparent;background:transparent;color:var(--text-tertiary);cursor:pointer;flex-shrink:0;opacity:0;transition:opacity .15s ease,background .15s ease,border-color .15s ease;">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                    </button>` : ''}
-                </div>
-                <div class="session-phase-header" id="sph-edit_${session.id}_${p.phase}"
-                    style="display:none;gap:10px;align-items:center;padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border);border-top:2px solid var(--blue);">
-                    <span style="display:inline-flex;width:26px;height:26px;background:var(--blue);color:white;border-radius:6px;align-items:center;justify-content:center;font-weight:700;font-size:11px;flex-shrink:0">${p.phase}</span>
-                    <input id="sph-input_${session.id}_${p.phase}" type="text"
-                        value="${p.name}" maxlength="40" autocomplete="off"
-                        style="flex:1;font-size:13px;font-weight:500;color:var(--text-primary);background:transparent;border:none;border-bottom:2px solid var(--blue);border-radius:0;outline:none;padding:2px 4px 4px;caret-color:var(--blue);font-family:var(--font-ui);"
-                        onkeydown="if(event.key==='Enter'){event.preventDefault();saveRenameSessionPhase('${session.id}','${p.phase}');}else if(event.key==='Escape'){cancelRenameSessionPhase('${session.id}','${p.phase}');}">
-                    <div style="display:flex;gap:5px;flex-shrink:0">
-                        <button onclick="saveRenameSessionPhase('${session.id}','${p.phase}')" title="Simpan"
-                            style="width:30px;height:30px;border-radius:6px;border:none;background:var(--green);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" width="13" height="13"><polyline points="20 6 9 17 4 12"/></svg>
-                        </button>
-                        <button onclick="cancelRenameSessionPhase('${session.id}','${p.phase}')" title="Batal"
-                            style="width:30px;height:30px;border-radius:6px;border:none;background:rgba(0,0,0,0.06);color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                        </button>
-                    </div>
-                </div>
-                <div id="phase-detail_${session.id}_${p.phase}" style="display:none">
-                    ${(() => {
-                return `<div class="phase-chart-container">
-                            <canvas id="chart_${session.id}_${p.phase}" style="max-height:200px;width:100%"></canvas>
-                        </div>
-                        <table class="data-table inner-table" style="width:100%;margin:0;border-radius:0">
-                        <thead><tr><th>Timestamp</th><th>Voltage (V)</th><th>Current (A)</th><th>Power (W)</th><th>Frequency (Hz)</th><th>Energy (kWh)</th><th>PF</th></tr></thead>
-                        <tbody id="inner-tbody_${session.id}_${p.phase}"></tbody>
-                        </table>`;
-            })()}
-                </div>
-            </div>`).join('');
+
         return `
         <tr class="session-row${isActive ? ' session-active' : ''}" onclick="toggleSessionDetail('${session.id}')">
             <td class="session-toggle-cell">
@@ -2613,52 +2543,40 @@ function buildSessionUI() {
             </td>
         </tr>
         <tr class="session-detail-row" id="detail_${session.id}" style="display:none">
-            <td colspan="5" style="padding:0">
-                <div style="background:var(--surface);border-top:1px solid var(--border)">
-                    ${phaseBlocks || '<div style="padding:16px;font-size:12px;color:var(--text-tertiary)">Tidak ada sensor terdeteksi</div>'}
-                </div>
+            <td colspan="5" style="padding:16px; background:var(--surface-2);">
+                <div class="session-dashboard" id="session-dash_${session.id}"></div>
             </td>
         </tr>`;
     }).join('');
+
     openSessions.forEach(sid => {
         const detail = $(`detail_${sid}`), chevron = $(`chevron_${sid}`);
         if (detail) detail.style.display = 'table-row';
         if (chevron) chevron.textContent = '\u25BC';
-    });
-    openPhases.forEach(key => {
-        const detail = $(`phase-detail_${key}`), chevron = $(`chevron_${key}`);
-        if (detail) detail.style.display = 'block';
-        if (chevron) chevron.textContent = '\u25BC';
-        // Re-fill tbody yang menjadi kosong setelah buildSessionUI re-render HTML
-        // key = 'session_TIMESTAMP_L1' → phase = bagian terakhir, sessionId = sisanya
-        const lastUnderscore = key.lastIndexOf('_');
-        if (lastUnderscore > 0) {
-            const sessionId = key.slice(0, lastUnderscore);
-            const phase     = key.slice(lastUnderscore + 1);
-            const pageStateKey = `${sessionId}__${phase}`;
-            if (recordsBySession[sessionId]?.[phase]) {
-                const currentPage = _phasePageState[pageStateKey] || 1;
-                _goPhaseRowsPage(sessionId, phase, currentPage);
-            } else if (_activeHistoryFetches.has(pageStateKey)) {
-                const tbody = document.getElementById(`inner-tbody_${sessionId}_${phase}`);
-                if (tbody) {
-                    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:12px;color:var(--text-tertiary);font-style:italic">Memuat data...</td></tr>`;
-                }
+        
+        if (!_sessionSelectedParam[sid]) _sessionSelectedParam[sid] = 'Power';
+        const session = sessionsData[sid];
+        if (session) {
+            const devObj = _deviceListCache.find(d => d.id === (session.deviceId || selectedDeviceId));
+            const frozenNames = session.phaseNames || {};
+            const recordedPhaseKeys = Object.keys(recordsBySession[sid] || {}).filter(k => /^L\d+$/.test(k));
+            const backendPhaseKeys = (session.phases || []).filter(k => /^L\d+$/.test(k));
+            const frozenPhaseKeys = Object.keys(frozenNames).filter(k => /^L\d+$/.test(k));
+            const allKeysSet = new Set([...recordedPhaseKeys, ...backendPhaseKeys, ...frozenPhaseKeys]);
+            if (allKeysSet.size === 0 && devObj && devObj.phases) {
+                devObj.phases.filter(p => p.enabled !== false).forEach(p => allKeysSet.add(p.phase));
             }
-        }
-    });
-    editingPhases.forEach((inputValue, key) => {
-        const viewEl = document.getElementById('sph-view_' + key);
-        const editEl = document.getElementById('sph-edit_' + key);
-        const inputEl = document.getElementById('sph-input_' + key);
-        if (!editEl) return;
-        if (viewEl) viewEl.style.display = 'none';
-        editEl.style.display = 'flex';
-        if (inputEl) {
-            inputEl.value = inputValue;
-            inputEl.focus();
-            const len = inputValue.length;
-            inputEl.setSelectionRange(len, len);
+            const phaseSourceKeys = Array.from(allKeysSet).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+            const phases = phaseSourceKeys.map(ph => {
+                const displayName = frozenNames[ph] || devObj?.phases?.find(p => p.phase === ph)?.name || ph;
+                return { phase: ph, name: displayName };
+            });
+            session.computedPhases = phases;
+            
+            if (!_sessionSelectedPhase[sid]) _sessionSelectedPhase[sid] = phases[0]?.phase || 'L1';
+            if (!_sessionSelectedPage[sid]) _sessionSelectedPage[sid] = 1;
+            
+            renderSessionDashboard(sid);
         }
     });
 }
@@ -2669,20 +2587,65 @@ function toggleSessionDetail(sessionId) {
     detail.style.display = isOpen ? 'none' : 'table-row';
     if (chevron) chevron.textContent = isOpen ? '\u25B6' : '\u25BC';
 
-    // Prefetch all phase history in the background when session is opened
     if (!isOpen) {
+        if (!_sessionSelectedParam[sessionId]) _sessionSelectedParam[sessionId] = 'Power';
         const session = sessionsData[sessionId];
-        if (session && session.phases) {
-            session.phases.forEach(phase => {
-                _fetchPhaseHistory(sessionId, phase);
+        if (session) {
+            const devObj = _deviceListCache.find(d => d.id === (session.deviceId || selectedDeviceId));
+            const frozenNames = session.phaseNames || {};
+            const recordedPhaseKeys = Object.keys(recordsBySession[sessionId] || {}).filter(k => /^L\d+$/.test(k));
+            const backendPhaseKeys = (session.phases || []).filter(k => /^L\d+$/.test(k));
+            const frozenPhaseKeys = Object.keys(frozenNames).filter(k => /^L\d+$/.test(k));
+            const allKeysSet = new Set([...recordedPhaseKeys, ...backendPhaseKeys, ...frozenPhaseKeys]);
+            if (allKeysSet.size === 0 && devObj && devObj.phases) {
+                devObj.phases.filter(p => p.enabled !== false).forEach(p => allKeysSet.add(p.phase));
+            }
+            const phaseSourceKeys = Array.from(allKeysSet).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+            const phases = phaseSourceKeys.map(ph => {
+                const displayName = frozenNames[ph] || devObj?.phases?.find(p => p.phase === ph)?.name || ph;
+                return { phase: ph, name: displayName };
             });
+            session.computedPhases = phases;
+            
+            if (!_sessionSelectedPhase[sessionId]) _sessionSelectedPhase[sessionId] = phases[0]?.phase || 'L1';
+            if (!_sessionSelectedPage[sessionId]) _sessionSelectedPage[sessionId] = 1;
+
+            const phaseKeys = phases.map(p => p.phase);
+            
+            const container = $(`session-dash_${sessionId}`);
+            if (container) {
+                container.innerHTML = `
+                <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 24px; color:var(--text-secondary); background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md) 0 var(--radius-md) 0;">
+                    <div style="width:24px; height:24px; border:2.5px solid var(--border); border-top-color:var(--brand); border-radius:50%; animation: spin 0.8s linear infinite; margin-bottom:12px;"></div>
+                    <span style="font-size:12px; font-weight:600; letter-spacing:0.3px">Memuat data sensor sesi...</span>
+                </div>`;
+            }
+            
+            Promise.all(phaseKeys.map(phase => {
+                return new Promise((resolve) => {
+                    _fetchPhaseHistory(sessionId, phase, (data) => {
+                        resolve(data);
+                    });
+                });
+            })).then(() => {
+                renderSessionDashboard(sessionId);
+            });
+        }
+    } else {
+        if (_sessionCharts[sessionId]) {
+            _sessionCharts[sessionId].destroy();
+            delete _sessionCharts[sessionId];
         }
     }
 }
-// Pagination state per session+phase: { 'sessionId__phase': currentPage }
-const _phasePageState = {};
-const _phaseCharts = {};
-const _PAGE_SIZE = 50;
+
+// ==========================================
+// UNIFIED SESSION DASHBOARD LOGIC (HISTORY TAB)
+// ==========================================
+const _sessionSelectedParam = {};
+const _sessionSelectedPhase = {};
+const _sessionSelectedPage = {};
+const _sessionCharts = {};
 
 const _activeHistoryFetches = new Set();
 const _activeHistoryCallbacks = {};
@@ -2728,117 +2691,168 @@ function _fetchPhaseHistory(sessionId, phase, cb) {
         });
 }
 
-function _renderPhaseRow(e) {
-    const pfColor = e.offline ? '#9CA3AF' : (e.PowerFactor >= 0.85 ? '#00A651' : '#ED1C24');
-    const offTag = e.offline ? ' <span style="color:#9CA3AF;font-size:9px;font-weight:700">[offline]</span>' : '';
-    return '<tr class="inner-record-row"' + (e.offline ? ' style="opacity:0.5;font-style:italic"' : '') + '>'
-        + '<td>' + e.timestamp + offTag + '</td>'
-        + '<td>' + (e.Voltage  != null ? e.Voltage.toFixed(2)  : '---') + '</td>'
-        + '<td>' + (e.Current  != null ? e.Current.toFixed(2)  : '---') + '</td>'
-        + '<td>' + (e.Power    != null ? e.Power.toFixed(2)    : '---') + '</td>'
-        + '<td>' + (e.Frequency!= null ? e.Frequency.toFixed(2): '---') + '</td>'
-        + '<td>' + (e.Energy   != null ? e.Energy.toFixed(3)   : '---') + '</td>'
-        + '<td style="color:' + pfColor + '">' + (e.PowerFactor != null ? e.PowerFactor.toFixed(3) : '---') + '</td>'
-        + '</tr>';
-}
+function renderSessionDashboard(sessionId) {
+    const session = sessionsData[sessionId];
+    if (!session) return;
 
-function _renderPaginationBar(sessionId, phase, currentPage, totalPages, totalRecords) {
-    const key = `${sessionId}__${phase}`;
-    const from = (currentPage - 1) * _PAGE_SIZE + 1;
-    const to   = Math.min(currentPage * _PAGE_SIZE, totalRecords);
-    return `<tr id="pagination-bar_${key}">
-        <td colspan="7" style="padding:8px 12px;background:var(--surface-2,var(--surface));border-top:1px solid var(--border)">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-                <span style="font-size:11px;color:var(--text-tertiary)">
-                    Menampilkan <b>${from}–${to}</b> dari <b>${totalRecords}</b> record
-                </span>
-                <div style="display:flex;align-items:center;gap:6px">
-                    <button onclick="_goPhaseRowsPage('${sessionId}','${phase}',${currentPage - 1})"
-                        ${currentPage <= 1 ? 'disabled' : ''}
-                        style="padding:4px 10px;border-radius:6px;border:1.5px solid var(--border);background:var(--surface);color:var(--text-primary);cursor:${currentPage <= 1 ? 'default' : 'pointer'};font-size:12px;opacity:${currentPage <= 1 ? '0.35' : '1'}">
-                        ← Prev
-                    </button>
-                    <span style="font-size:12px;color:var(--text-secondary);font-weight:600;min-width:80px;text-align:center">
-                        Hal ${currentPage} / ${totalPages}
-                    </span>
-                    <button onclick="_goPhaseRowsPage('${sessionId}','${phase}',${currentPage + 1})"
-                        ${currentPage >= totalPages ? 'disabled' : ''}
-                        style="padding:4px 10px;border-radius:6px;border:1.5px solid var(--border);background:var(--surface);color:var(--text-primary);cursor:${currentPage >= totalPages ? 'default' : 'pointer'};font-size:12px;opacity:${currentPage >= totalPages ? '0.35' : '1'}">
-                        Next →
+    const phases = session.computedPhases || [];
+    const activePhase = _sessionSelectedPhase[sessionId] || 'L1';
+    const activeParam = _sessionSelectedParam[sessionId] || 'Power';
+
+    const container = $(`session-dash_${sessionId}`);
+    if (!container) return;
+
+    let hasSkeleton = container.querySelector('.session-dashboard-card');
+    if (!hasSkeleton) {
+        container.innerHTML = `
+        <div class="session-dashboard-card" style="margin-bottom:12px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md) 0 var(--radius-md) 0; padding:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                <div style="font-family:var(--font-ui)">
+                    <h5 style="margin:0; font-size:13px; font-weight:800; color:var(--text-primary)">Grafik Telemetri Sesi</h5>
+                    <p style="margin:2px 0 0; font-size:11px; color:var(--text-tertiary)">Visualisasi perbandingan seluruh sensor</p>
+                </div>
+                <select id="paramSelect_${sessionId}" class="param-select" style="width:130px" onchange="onSessionParamChange('${sessionId}')">
+                    <option value="Power">Power (W)</option>
+                    <option value="Voltage">Voltage (V)</option>
+                    <option value="Current">Current (A)</option>
+                    <option value="Frequency">Frequency (Hz)</option>
+                    <option value="Energy">Energy (kWh)</option>
+                    <option value="PowerFactor">Power Factor</option>
+                </select>
+            </div>
+            <div style="height:220px; position:relative; width:100%">
+                <canvas id="chart_${sessionId}"></canvas>
+            </div>
+        </div>
+
+        <div class="session-dashboard-card" style="background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md) 0 var(--radius-md) 0; padding:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+                <div>
+                    <h5 style="margin:0; font-size:13px; font-weight:800; color:var(--text-primary)">Tabel Data Telemetri</h5>
+                </div>
+                <div style="display:flex; gap:6px; align-items:center">
+                    <div id="tabs_${sessionId}" style="display:flex; gap:4px"></div>
+                    <button onclick="event.stopPropagation(); startRenameSessionPhase('${sessionId}')" title="Ubah nama sensor" style="width:26px; height:26px; border-radius:4px; border:1px solid var(--border); background:transparent; color:var(--text-tertiary); cursor:pointer; display:flex; align-items:center; justify-content:center;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     </button>
                 </div>
             </div>
-        </td>
-    </tr>`;
+            <div id="rename-phase-wrap_${sessionId}" style="display:none; margin-bottom:10px; padding:8px 12px; background:var(--surface-3); border-radius:4px; align-items:center; gap:8px;">
+                <span style="font-size:11px; font-weight:700; color:var(--text-secondary)" id="rename-phase-label_${sessionId}">Sensor:</span>
+                <input id="rename-phase-input_${sessionId}" type="text" style="flex:1; height:28px; font-size:12px; font-weight:600; padding:0 8px; border:1px solid var(--border); border-radius:4px; outline:none;">
+                <button onclick="saveRenameSessionPhase('${sessionId}')" style="padding:4px 8px; font-size:11px; background:var(--green); color:white; border:none; border-radius:4px; cursor:pointer;">Simpan</button>
+                <button onclick="cancelRenameSessionPhase('${sessionId}')" style="padding:4px 8px; font-size:11px; background:var(--border); color:var(--text-secondary); border:none; border-radius:4px; cursor:pointer;">Batal</button>
+            </div>
+            <div class="table-container" style="margin:0; border:none; box-shadow:none;">
+                <table class="data-table inner-table" style="width:100%;">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th style="text-align:right">Voltage (V)</th>
+                            <th style="text-align:right">Current (A)</th>
+                            <th style="text-align:right">Power (W)</th>
+                            <th style="text-align:right">Frequency (Hz)</th>
+                            <th style="text-align:right">Energy (kWh)</th>
+                            <th style="text-align:right">PF</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody_${sessionId}"></tbody>
+                </table>
+                <div id="pag_${sessionId}" style="margin-top:10px"></div>
+            </div>
+        </div>`;
+    }
+
+    const tabsWrap = $(`tabs_${sessionId}`);
+    if (tabsWrap) {
+        tabsWrap.innerHTML = phases.map(p => {
+            return `<button class="sensor-tab-btn ${p.phase === activePhase ? 'active' : ''}" onclick="event.stopPropagation(); switchSessionSensorTab('${sessionId}', '${p.phase}')">${p.name}</button>`;
+        }).join('');
+    }
+
+    const paramSelect = $(`paramSelect_${sessionId}`);
+    if (paramSelect) paramSelect.value = activeParam;
+
+    renderSessionChart(sessionId);
+    renderSessionTable(sessionId);
 }
 
-function _goPhaseRowsPage(sessionId, phase, page) {
-    const key = `${sessionId}__${phase}`;
-    const all = recordsBySession[sessionId]?.[phase];
-    if (!all) return;
-    const pr = all.slice().sort(sortByEpochDesc);
-    const totalPages = Math.ceil(pr.length / _PAGE_SIZE);
-    const p = Math.max(1, Math.min(page, totalPages));
-    _phasePageState[key] = p;
-    const slice = pr.slice((p - 1) * _PAGE_SIZE, p * _PAGE_SIZE);
-    const tbody = document.getElementById(`inner-tbody_${sessionId}_${phase}`);
-    if (!tbody) return;
-    tbody.innerHTML = slice.map(_renderPhaseRow).join('')
-        + (totalPages > 1 ? _renderPaginationBar(sessionId, phase, p, totalPages, pr.length) : '');
+function switchSessionSensorTab(sessionId, phase) {
+    _sessionSelectedPhase[sessionId] = phase;
+    _sessionSelectedPage[sessionId] = 1;
+    renderSessionDashboard(sessionId);
 }
 
-function renderPhaseChart(sessionId, phase, records) {
-    const canvasId = `chart_${sessionId}_${phase}`;
+function onSessionParamChange(sessionId) {
+    const dropdown = $(`paramSelect_${sessionId}`);
+    if (dropdown) _sessionSelectedParam[sessionId] = dropdown.value;
+    renderSessionChart(sessionId);
+}
+
+function renderSessionChart(sessionId) {
+    const canvasId = `chart_${sessionId}`;
     const ctx = document.getElementById(canvasId);
     if (!ctx) return;
 
-    const key = `${sessionId}__${phase}`;
-    if (_phaseCharts[key]) {
-        _phaseCharts[key].destroy();
-        delete _phaseCharts[key];
+    if (_sessionCharts[sessionId]) {
+        _sessionCharts[sessionId].destroy();
+        delete _sessionCharts[sessionId];
     }
 
-    if (!records || !records.length) return;
+    const session = sessionsData[sessionId];
+    if (!session) return;
 
-    // Downsample records if they are more than 100 to keep it highly performant
-    let dataPoints = records.slice().sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
-    if (dataPoints.length > 100) {
-        const step = Math.ceil(dataPoints.length / 100);
-        dataPoints = dataPoints.filter((_, idx) => idx % step === 0);
+    const phases = session.computedPhases || [];
+    const activeParam = _sessionSelectedParam[sessionId] || 'Power';
+
+    const allTimestampsSet = new Set();
+    phases.forEach(p => {
+        const records = recordsBySession[sessionId]?.[p.phase] || [];
+        records.forEach(r => {
+            if (r.timestamp) allTimestampsSet.add(r.timestamp);
+        });
+    });
+
+    const sortedTimestamps = Array.from(allTimestampsSet).sort((a, b) => parseTimestampToEpoch(a) - parseTimestampToEpoch(b));
+    let chartLabels = sortedTimestamps;
+    if (chartLabels.length > 120) {
+        const step = Math.ceil(chartLabels.length / 120);
+        chartLabels = chartLabels.filter((_, idx) => idx % step === 0);
     }
 
-    const labels = dataPoints.map(d => d.timestamp?.split(' ')[0] || ''); // HH:MM:SS
-    const voltages = dataPoints.map(d => d.Voltage != null ? d.Voltage : (d.voltage != null ? d.voltage : 0));
-    const currents = dataPoints.map(d => d.Current != null ? d.Current : (d.current != null ? d.current : 0));
-    const powers = dataPoints.map(d => d.Power != null ? d.Power : (d.power != null ? d.power : 0));
+    const datasets = phases.map((p, idx) => {
+        const records = recordsBySession[sessionId]?.[p.phase] || [];
+        const dataMap = {};
+        records.forEach(r => {
+            if (r.timestamp) dataMap[r.timestamp] = r;
+        });
 
-    _phaseCharts[key] = new Chart(ctx, {
+        const dataPoints = chartLabels.map(ts => {
+            const rec = dataMap[ts];
+            return rec ? (rec[activeParam] != null ? rec[activeParam] : 0) : null;
+        });
+
+        const phaseColors = ['#00A651', '#1E90FF', '#FF8C00', '#8A2BE2', '#FF1493', '#00CED1'];
+        const color = phaseColors[idx % phaseColors.length];
+
+        return {
+            label: p.name,
+            data: dataPoints,
+            borderColor: color,
+            backgroundColor: color + '0a',
+            borderWidth: 1.5,
+            pointRadius: chartLabels.length > 60 ? 0 : 2.5,
+            fill: false,
+            tension: 0.15,
+            spanGaps: true
+        };
+    });
+
+    _sessionCharts[sessionId] = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: labels,
-            datasets: [
-                {
-                    label: 'Power (W)',
-                    data: powers,
-                    borderColor: 'oklch(0.508 0.118 165.612)', // primary brand color (greenish)
-                    backgroundColor: 'rgba(40, 167, 69, 0.04)',
-                    borderWidth: 1.5,
-                    pointRadius: dataPoints.length > 50 ? 0 : 2,
-                    fill: true,
-                    yAxisID: 'y-power',
-                    tension: 0.2
-                },
-                {
-                    label: 'Voltage (V)',
-                    data: voltages,
-                    borderColor: '#1E90FF', // Blue
-                    borderWidth: 1.5,
-                    pointRadius: dataPoints.length > 50 ? 0 : 2,
-                    fill: false,
-                    yAxisID: 'y-voltage',
-                    tension: 0.2
-                }
-            ]
+            labels: chartLabels.map(ts => ts.split(' ')[1] || ts),
+            datasets: datasets
         },
         options: {
             responsive: true,
@@ -2867,30 +2881,13 @@ function renderPhaseChart(sessionId, phase, records) {
                         color: 'var(--text-tertiary)'
                     }
                 },
-                'y-power': {
-                    type: 'linear',
-                    position: 'left',
+                y: {
                     grid: { color: 'rgba(0,0,0,0.03)' },
                     title: {
                         display: true,
-                        text: 'Power (W)',
+                        text: activeParam,
                         font: { family: 'var(--font-ui)', weight: 'bold', size: 10 },
-                        color: 'oklch(0.508 0.118 165.612)'
-                    },
-                    ticks: {
-                        font: { family: 'var(--font-ui)', size: 9 },
-                        color: 'var(--text-tertiary)'
-                    }
-                },
-                'y-voltage': {
-                    type: 'linear',
-                    position: 'right',
-                    grid: { drawOnChartArea: false },
-                    title: {
-                        display: true,
-                        text: 'Voltage (V)',
-                        font: { family: 'var(--font-ui)', weight: 'bold', size: 10 },
-                        color: '#1E90FF'
+                        color: 'var(--text-secondary)'
                     },
                     ticks: {
                         font: { family: 'var(--font-ui)', size: 9 },
@@ -2902,35 +2899,61 @@ function renderPhaseChart(sessionId, phase, records) {
     });
 }
 
-function togglePhaseDetails(sessionId, phase) {
-    const detail = $(`phase-detail_${sessionId}_${phase}`), chevron = $(`chevron_${sessionId}_${phase}`);
-    if (!detail) return;
-    const isOpen = detail.style.display !== 'none';
-    if (!isOpen) {
-        detail.style.display = 'block';
-        if (chevron) chevron.textContent = '▼';
-        
-        const tbody = document.getElementById(`inner-tbody_${sessionId}_${phase}`);
-        // Jika data belum ada di cache, tampilkan info memuat data
-        if (tbody && !recordsBySession[sessionId]?.[phase]) {
-            tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:12px;color:var(--text-tertiary);font-style:italic">Memuat data...</td></tr>`;
-        }
+function renderSessionTable(sessionId) {
+    const tbody = $(`tbody_${sessionId}`);
+    const activePhase = _sessionSelectedPhase[sessionId];
+    if (!tbody || !activePhase) return;
 
-        _fetchPhaseHistory(sessionId, phase, (data) => {
-            if (data) {
-                _goPhaseRowsPage(sessionId, phase, _phasePageState[`${sessionId}__${phase}`] || 1);
-                setTimeout(() => renderPhaseChart(sessionId, phase, data), 50);
-            } else {
-                if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:12px;color:var(--destructive)">Gagal memuat data.</td></tr>`;
-            }
-        });
+    const records = recordsBySession[sessionId]?.[activePhase] || [];
+    const sorted = records.slice().sort((a, b) => parseTimestampToEpoch(b.timestamp) - parseTimestampToEpoch(a.timestamp));
+
+    const pageSize = 20;
+    const totalPages = Math.ceil(sorted.length / pageSize);
+    const page = Math.max(1, Math.min(_sessionSelectedPage[sessionId] || 1, totalPages));
+    _sessionSelectedPage[sessionId] = page;
+
+    const slice = sorted.slice((page - 1) * pageSize, page * pageSize);
+
+    if (!slice.length) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:16px;color:var(--text-tertiary)">Tidak ada data.</td></tr>`;
+        $(`pag_${sessionId}`).innerHTML = '';
+        return;
+    }
+
+    tbody.innerHTML = slice.map(r => {
+        const isOff = r.offline;
+        return `<tr class="inner-record-row ${isOff ? 'record-offline' : ''}">
+            <td>${r.timestamp || '---'}</td>
+            <td style="text-align:right">${r.Voltage != null ? r.Voltage.toFixed(2) : '---'}</td>
+            <td style="text-align:right">${r.Current != null ? r.Current.toFixed(2) : '---'}</td>
+            <td style="text-align:right; font-weight:700; color:${isOff ? 'inherit' : 'var(--brand)'}">${r.Power != null ? r.Power.toFixed(2) : '---'}</td>
+            <td style="text-align:right">${r.Frequency != null ? r.Frequency.toFixed(1) : '---'}</td>
+            <td style="text-align:right">${r.Energy != null ? r.Energy.toFixed(4) : '---'}</td>
+            <td style="text-align:right">${r.PowerFactor != null ? r.PowerFactor.toFixed(4) : '---'}</td>
+        </tr>`;
+    }).join('');
+
+    if (totalPages > 1) {
+        $(`pag_${sessionId}`).innerHTML = _renderSessionPaginationBar(sessionId, page, totalPages, sorted.length);
     } else {
-        detail.style.display = 'none';
-        if (chevron) chevron.textContent = '▶';
+        $(`pag_${sessionId}`).innerHTML = '';
     }
 }
-function _loadAllPhaseRows(sessionId, phase) {
-    _goPhaseRowsPage(sessionId, phase, 1);
+
+function _renderSessionPaginationBar(sessionId, page, totalPages, totalCount) {
+    return `<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+        <span style="font-size:11px; color:var(--text-tertiary); font-weight:600">Menampilkan ${Math.min(totalCount, (page - 1) * 20 + 1)}-${Math.min(totalCount, page * 20)} dari ${totalCount} record</span>
+        <div style="display:flex; gap:4px">
+            <button class="time-filter-btn" ${page <= 1 ? 'disabled style="opacity:0.4;cursor:not-allowed"' : ''} onclick="goSessionTablePage('${sessionId}', ${page - 1})">Sebelumnya</button>
+            <span style="display:flex; align-items:center; padding:0 8px; font-size:11.5px; font-weight:700; color:var(--text-secondary)">Halaman ${page} / ${totalPages}</span>
+            <button class="time-filter-btn" ${page >= totalPages ? 'disabled style="opacity:0.4;cursor:not-allowed"' : ''} onclick="goSessionTablePage('${sessionId}', ${page + 1})">Berikutnya</button>
+        </div>
+    </div>`;
+}
+
+function goSessionTablePage(sessionId, page) {
+    _sessionSelectedPage[sessionId] = page;
+    renderSessionTable(sessionId);
 }
 (function _injectSphHoverStyle() {
     if (document.getElementById('sph-hover-style')) return;
@@ -2950,62 +2973,65 @@ function _loadAllPhaseRows(sessionId, phase) {
     `;
     document.head.appendChild(s);
 })();
-function startRenameSessionPhase(sessionId, phase) {
-    const viewEl = $(`sph-view_${sessionId}_${phase}`);
-    const editEl = $(`sph-edit_${sessionId}_${phase}`);
-    const inputEl = $(`sph-input_${sessionId}_${phase}`);
-    if (!viewEl || !editEl) return;
-    viewEl.style.display = 'none';
-    editEl.style.display = 'flex';
-    inputEl?.focus();
-    inputEl?.select();
+function startRenameSessionPhase(sessionId) {
+    const activePhase = _sessionSelectedPhase[sessionId];
+    if (!activePhase) return;
+    
+    const inputWrap = $(`rename-phase-wrap_${sessionId}`);
+    const inputEl = $(`rename-phase-input_${sessionId}`);
+    const labelEl = $(`rename-phase-label_${sessionId}`);
+    if (!inputWrap || !inputEl || !labelEl) return;
+    
+    // Find current phase name from sessionsData
+    const session = sessionsData[sessionId];
+    const phaseNames = session?.phaseNames || {};
+    const currentName = phaseNames[activePhase] || activePhase;
+    
+    labelEl.textContent = `Sensor ${activePhase}:`;
+    inputEl.value = currentName;
+    inputWrap.style.display = 'flex';
+    setTimeout(() => { inputEl.focus(); inputEl.select(); }, 50);
 }
-function cancelRenameSessionPhase(sessionId, phase) {
-    const viewEl = $(`sph-view_${sessionId}_${phase}`);
-    const editEl = $(`sph-edit_${sessionId}_${phase}`);
-    const inputEl = $(`sph-input_${sessionId}_${phase}`);
-    const labelEl = $(`sph-label_${sessionId}_${phase}`);
-    if (inputEl && labelEl) inputEl.value = labelEl.textContent;
-    if (editEl) editEl.style.display = 'none';
-    if (viewEl) viewEl.style.display = 'flex';
+
+function cancelRenameSessionPhase(sessionId) {
+    const inputWrap = $(`rename-phase-wrap_${sessionId}`);
+    if (inputWrap) inputWrap.style.display = 'none';
 }
-async function saveRenameSessionPhase(sessionId, phase) {
-    const inputEl = $(`sph-input_${sessionId}_${phase}`);
-    const labelEl = $(`sph-label_${sessionId}_${phase}`);
+
+async function saveRenameSessionPhase(sessionId) {
+    const activePhase = _sessionSelectedPhase[sessionId];
+    if (!activePhase) return;
+    
+    const inputEl = $(`rename-phase-input_${sessionId}`);
     const newName = inputEl?.value.trim();
-    const oldName = labelEl?.textContent || phase;
-    if (!newName) {
-        await showModal('Nama Kosong', 'Nama sensor tidak boleh kosong.', 'warning');
-        inputEl?.focus();
-        return;
-    }
-    if (newName.length > 40) {
-        await showModal('Terlalu Panjang', 'Nama maksimal 40 karakter.', 'warning');
-        inputEl?.focus();
-        return;
-    }
-    cancelRenameSessionPhase(sessionId, phase);
-    if (labelEl) labelEl.textContent = newName;
-    if (sessionsData[sessionId]) {
-        if (!sessionsData[sessionId].phaseNames) sessionsData[sessionId].phaseNames = {};
-        sessionsData[sessionId].phaseNames[phase] = newName;
-    }
+    if (!newName) { await showModal('Input Kosong', 'Nama sensor tidak boleh kosong.', 'warning'); return; }
+    if (newName.length > 40) { await showModal('Terlalu Panjang', 'Nama maksimal 40 karakter.', 'warning'); return; }
+
+    cancelRenameSessionPhase(sessionId);
+    showGlobalLoader();
+    
     try {
         const res = await fetch(`/api/capture/rename-session-sensor`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionId: sessionId, phase: phase, name: newName })
+            body: JSON.stringify({ sessionId: sessionId, phase: activePhase, name: newName })
         });
         const json = await res.json();
         if (!json.ok) throw new Error(json.error || 'Server error');
-
-        await showModal('Berhasil', `Nama sensor ${phase} pada sesi ini diubah menjadi:\n"${newName}"`, 'success');
-    } catch (e) {
-        if (labelEl) labelEl.textContent = oldName;
-        if (sessionsData[sessionId]?.phaseNames) {
-            sessionsData[sessionId].phaseNames[phase] = oldName;
+        
+        // Update cache
+        if (sessionsData[sessionId]) {
+            if (!sessionsData[sessionId].phaseNames) sessionsData[sessionId].phaseNames = {};
+            sessionsData[sessionId].phaseNames[activePhase] = newName;
         }
-        await showModal('Error', 'Gagal menyimpan: ' + e.message, 'error');
+        
+        // Re-render dashboard to show updated tab names
+        renderSessionDashboard(sessionId);
+        await showModal('Berhasil', `Nama sensor ${activePhase} pada sesi ini diubah menjadi:\n"${newName}"`, 'success');
+    } catch (e) {
+        await showModal('Gagal Mengubah Nama', 'Error: ' + e.message, 'error');
+    } finally {
+        hideGlobalLoader();
     }
 }
 function getDevicePhasesWithNames() {
