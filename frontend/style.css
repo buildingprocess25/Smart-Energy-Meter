@@ -978,3 +978,36 @@ mark.search-highlight { background: rgba(187,23,36,0.12); color: var(--brand); b
     border-radius: 50%;
     animation: spin-dot 0.8s linear infinite;
 }
+
+/* Danger Zone Styling for Settings */
+.control-card.danger-zone {
+    border-color: rgba(220, 53, 69, 0.2);
+}
+.control-card.danger-zone::after {
+    background: linear-gradient(90deg, var(--destructive), rgba(220, 53, 69, 0.4), transparent);
+}
+.control-card.danger-zone:hover {
+    border-color: rgba(220, 53, 69, 0.4);
+    border-bottom-color: var(--destructive);
+    box-shadow: var(--shadow-md), 0 0 0 1px rgba(220, 53, 69, 0.08);
+}
+.control-card.danger-zone .control-icon {
+    color: var(--destructive);
+    background: rgba(220, 53, 69, 0.08);
+    box-shadow: 0 2px 8px rgba(220, 53, 69, 0.05);
+}
+.control-card.danger-zone:hover .control-icon {
+    background: rgba(220, 53, 69, 0.12);
+    box-shadow: 0 4px 10px rgba(220, 53, 69, 0.16);
+}
+.control-card.danger-zone h4 {
+    color: var(--destructive);
+}
+.control-card.danger-zone .btn-reset {
+    background: linear-gradient(135deg, var(--destructive), color-mix(in srgb, var(--destructive) 75%, black)) !important;
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--destructive) 30%, transparent) !important;
+}
+.control-card.danger-zone .btn-reset:hover {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--destructive) 85%, white), var(--destructive)) !important;
+    box-shadow: 0 6px 16px color-mix(in srgb, var(--destructive) 40%, transparent) !important;
+}
