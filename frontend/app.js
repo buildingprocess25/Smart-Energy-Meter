@@ -50,6 +50,10 @@ let chartTargetDate = null;
 let _hourlyListenerDate = null;
 let _userIsZoomed = false;
 let _visiblePoints = 600;
+let activeOfflineSessionData = null;
+let activeOfflineChart = null;
+let activeOfflineSelectedPhase = '';
+let activeOfflineSelectedPage = 1;
 const MAX_DATA_POINTS = 600;
 const PARAM_KEYS = ['voltage', 'current', 'power', 'frequency', 'energy', 'powerFactor'];
 let phaseChartData = {};
@@ -1712,6 +1716,9 @@ function switchTab(tabName) {
     $(`${tabName}Tab`)?.classList.add('active');
     $(`${tabName}Content`)?.classList.add('active');
     if (tabName === 'history') loadDevices().then(() => buildSessionUI());
+    if (tabName === 'tools' && typeof activeOfflineChart !== 'undefined' && activeOfflineChart) {
+        setTimeout(() => activeOfflineChart.resize(), 50);
+    }
 }
 async function loadDevices() {
     try {
@@ -2494,21 +2501,51 @@ function buildSessionUI() {
         });
         const allPhaseRecords = Object.values(recordsBySession[session.id] || {}).flat();
         const isActive = session.id === currentSessionId && captureActive;
-        let actionBtns = `
-            <button class="session-rename-btn" onclick="openChangeTimeModal('${session.id}','${session.startTime}','${_escapeAttr(session.name)}',event)" title="Ubah Waktu" style="color:var(--text-secondary)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-            </button>`;
-        if (!isActive) {
+        let actionBtns = '';
+        if (isActive) {
             actionBtns += `
-            <button class="session-rename-btn" onclick="exportSession('${session.id}','${_escapeAttr(session.name)}',event)" title="Export Excel">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            <div class="session-dropdown-wrap" onclick="event.stopPropagation()">
+                <button class="session-more-btn" onclick="toggleSessionDropdown('${session.id}', event)" title="Menu Aksi">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="5" r="1.5"></circle><circle cx="12" cy="12" r="1.5"></circle><circle cx="12" cy="19" r="1.5"></circle></svg>
+                </button>
+                <div class="session-dropdown-menu" id="dropdown_${session.id}">
+                    <button class="session-dropdown-item" onclick="openChangeTimeModal('${session.id}','${session.startTime}','${_escapeAttr(session.name)}',event)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                        Ubah Waktu
+                    </button>
+                </div>
+            </div>`;
+        } else {
+            actionBtns += `
+            <button class="session-export-btn" onclick="exportSession('${session.id}','${_escapeAttr(session.name)}',event)" title="Export Excel">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
             </button>
-            <button class="session-rename-btn" onclick="openRenameModal('${session.id}','${_escapeAttr(session.name)}',event)" title="Rename">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-            </button>
-            <button class="session-delete-btn" onclick="deleteSession('${session.id}','${_escapeAttr(session.name)}',event)" title="Hapus">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6m4-6v6"></path></svg>
-            </button>`;
+            <div class="session-dropdown-wrap" onclick="event.stopPropagation()">
+                <button class="session-more-btn" onclick="toggleSessionDropdown('${session.id}', event)" title="Menu Aksi">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="5" r="1.5"></circle><circle cx="12" cy="12" r="1.5"></circle><circle cx="12" cy="19" r="1.5"></circle></svg>
+                </button>
+                <div class="session-dropdown-menu" id="dropdown_${session.id}">
+                    <button class="session-dropdown-item" onclick="openRenameModal('${session.id}','${_escapeAttr(session.name)}',event)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                        Rename Sesi
+                    </button>
+                    <button class="session-dropdown-item" onclick="openChangeTimeModal('${session.id}','${session.startTime}','${_escapeAttr(session.name)}',event)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                        Ubah Waktu
+                    </button>
+                    ${!session.isOfflineBackup ? `
+                    <button class="session-dropdown-item" onclick="backupSessionJSON('${session.id}','${_escapeAttr(session.name)}',event)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        Backup JSON
+                    </button>
+                    ` : ''}
+                    <div style="border-top:1px solid var(--border);margin:4px 0"></div>
+                    <button class="session-dropdown-item danger" onclick="deleteSession('${session.id}','${_escapeAttr(session.name)}',event)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6m4-6v6"></path></svg>
+                        Hapus Sesi
+                    </button>
+                </div>
+            </div>`;
         }
         const phaseBlocks = phases.map(p => `
             <div class="session-phase-block" id="phase-block_${session.id}_${p.phase}">
@@ -2544,7 +2581,10 @@ function buildSessionUI() {
                 </div>
                 <div id="phase-detail_${session.id}_${p.phase}" style="display:none">
                     ${(() => {
-                return `<table class="data-table inner-table" style="width:100%;margin:0;border-radius:0">
+                return `<div class="phase-chart-container">
+                            <canvas id="chart_${session.id}_${p.phase}" style="max-height:200px;width:100%"></canvas>
+                        </div>
+                        <table class="data-table inner-table" style="width:100%;margin:0;border-radius:0">
                         <thead><tr><th>Timestamp</th><th>Voltage (V)</th><th>Current (A)</th><th>Power (W)</th><th>Frequency (Hz)</th><th>Energy (kWh)</th><th>PF</th></tr></thead>
                         <tbody id="inner-tbody_${session.id}_${p.phase}"></tbody>
                         </table>`;
@@ -2561,6 +2601,7 @@ function buildSessionUI() {
                 <span class="session-name">${_highlight(session.name || 'Tanpa nama')}</span>
                 ${liveDeviceName && liveDeviceName !== session.deviceId ? `<span style="font-size:10px;color:var(--text-tertiary);margin-left:4px">· ${liveDeviceName}</span>` : ''}
                 ${isActive ? '<span class="session-live-badge">&#9679; LIVE</span>' : ''}
+                ${session.isOfflineBackup ? '<span class="session-live-badge" style="background:rgba(147,51,234,0.1);color:#9333ea;border-color:rgba(147,51,234,0.25)">&#9679; OFFLINE VIEW</span>' : ''}
             </td>
             <td>${session.startTime || '---'}</td>
             <td>${isActive ? '<span style="color:#00A651;font-weight:700">Sedang berlangsung...</span>' : (session.endTime || '---')}</td>
@@ -2640,6 +2681,7 @@ function toggleSessionDetail(sessionId) {
 }
 // Pagination state per session+phase: { 'sessionId__phase': currentPage }
 const _phasePageState = {};
+const _phaseCharts = {};
 const _PAGE_SIZE = 50;
 
 const _activeHistoryFetches = new Set();
@@ -2745,6 +2787,121 @@ function _goPhaseRowsPage(sessionId, phase, page) {
         + (totalPages > 1 ? _renderPaginationBar(sessionId, phase, p, totalPages, pr.length) : '');
 }
 
+function renderPhaseChart(sessionId, phase, records) {
+    const canvasId = `chart_${sessionId}_${phase}`;
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return;
+
+    const key = `${sessionId}__${phase}`;
+    if (_phaseCharts[key]) {
+        _phaseCharts[key].destroy();
+        delete _phaseCharts[key];
+    }
+
+    if (!records || !records.length) return;
+
+    // Downsample records if they are more than 100 to keep it highly performant
+    let dataPoints = records.slice().sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
+    if (dataPoints.length > 100) {
+        const step = Math.ceil(dataPoints.length / 100);
+        dataPoints = dataPoints.filter((_, idx) => idx % step === 0);
+    }
+
+    const labels = dataPoints.map(d => d.timestamp?.split(' ')[0] || ''); // HH:MM:SS
+    const voltages = dataPoints.map(d => d.Voltage != null ? d.Voltage : (d.voltage != null ? d.voltage : 0));
+    const currents = dataPoints.map(d => d.Current != null ? d.Current : (d.current != null ? d.current : 0));
+    const powers = dataPoints.map(d => d.Power != null ? d.Power : (d.power != null ? d.power : 0));
+
+    _phaseCharts[key] = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Power (W)',
+                    data: powers,
+                    borderColor: 'oklch(0.508 0.118 165.612)', // primary brand color (greenish)
+                    backgroundColor: 'rgba(40, 167, 69, 0.04)',
+                    borderWidth: 1.5,
+                    pointRadius: dataPoints.length > 50 ? 0 : 2,
+                    fill: true,
+                    yAxisID: 'y-power',
+                    tension: 0.2
+                },
+                {
+                    label: 'Voltage (V)',
+                    data: voltages,
+                    borderColor: '#1E90FF', // Blue
+                    borderWidth: 1.5,
+                    pointRadius: dataPoints.length > 50 ? 0 : 2,
+                    fill: false,
+                    yAxisID: 'y-voltage',
+                    tension: 0.2
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        boxWidth: 12,
+                        font: { family: 'var(--font-ui)', weight: 'bold', size: 10 },
+                        color: 'var(--text-secondary)'
+                    }
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false
+                }
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: {
+                        maxTicksLimit: 8,
+                        font: { family: 'var(--font-ui)', size: 9 },
+                        color: 'var(--text-tertiary)'
+                    }
+                },
+                'y-power': {
+                    type: 'linear',
+                    position: 'left',
+                    grid: { color: 'rgba(0,0,0,0.03)' },
+                    title: {
+                        display: true,
+                        text: 'Power (W)',
+                        font: { family: 'var(--font-ui)', weight: 'bold', size: 10 },
+                        color: 'oklch(0.508 0.118 165.612)'
+                    },
+                    ticks: {
+                        font: { family: 'var(--font-ui)', size: 9 },
+                        color: 'var(--text-tertiary)'
+                    }
+                },
+                'y-voltage': {
+                    type: 'linear',
+                    position: 'right',
+                    grid: { drawOnChartArea: false },
+                    title: {
+                        display: true,
+                        text: 'Voltage (V)',
+                        font: { family: 'var(--font-ui)', weight: 'bold', size: 10 },
+                        color: '#1E90FF'
+                    },
+                    ticks: {
+                        font: { family: 'var(--font-ui)', size: 9 },
+                        color: 'var(--text-tertiary)'
+                    }
+                }
+            }
+        }
+    });
+}
+
 function togglePhaseDetails(sessionId, phase) {
     const detail = $(`phase-detail_${sessionId}_${phase}`), chevron = $(`chevron_${sessionId}_${phase}`);
     if (!detail) return;
@@ -2762,6 +2919,7 @@ function togglePhaseDetails(sessionId, phase) {
         _fetchPhaseHistory(sessionId, phase, (data) => {
             if (data) {
                 _goPhaseRowsPage(sessionId, phase, _phasePageState[`${sessionId}__${phase}`] || 1);
+                setTimeout(() => renderPhaseChart(sessionId, phase, data), 50);
             } else {
                 if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:12px;color:var(--destructive)">Gagal memuat data.</td></tr>`;
             }
@@ -2874,46 +3032,62 @@ function _buildExcelRow(entry, deviceName) {
 }
 async function exportSession(sessionId, sessionName, event) {
     event.stopPropagation();
+    
+    const btn = event.currentTarget;
+    if (!btn || btn.classList.contains('loading')) return;
+    
+    btn.classList.add('loading');
+    btn.disabled = true;
+    const originalHTML = btn.innerHTML;
+    
+    // Set rotating spinner SVG
+    btn.innerHTML = `<svg class="spinner-icon rotate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="width:13px;height:13px;display:inline-block;vertical-align:middle;"><circle cx="12" cy="12" r="10" stroke-dasharray="30 10"></circle></svg>`;
 
-    // Ensure all phase data is loaded before exporting
-    const sessionMeta = sessionsData[sessionId];
-    if (sessionMeta) {
-        const phaseNames = sessionMeta.phaseNames || {};
-        const phases = Object.keys(phaseNames).filter(k => /^L\d+$/.test(k));
-        if (!recordsBySession[sessionId]) recordsBySession[sessionId] = {};
+    try {
+        // Ensure all phase data is loaded before exporting
+        const sessionMeta = sessionsData[sessionId];
+        if (sessionMeta) {
+            const phaseNames = sessionMeta.phaseNames || {};
+            const phases = Object.keys(phaseNames).filter(k => /^L\d+$/.test(k));
+            if (!recordsBySession[sessionId]) recordsBySession[sessionId] = {};
 
-        let needsFetch = false;
-        for (const ph of phases) {
-            if (!recordsBySession[sessionId][ph]) {
-                needsFetch = true;
-                break;
+            let needsFetch = false;
+            for (const ph of phases) {
+                if (!recordsBySession[sessionId][ph]) {
+                    needsFetch = true;
+                    break;
+                }
+            }
+
+            if (needsFetch) {
+                await Promise.all(phases.map(async (ph) => {
+                    if (!recordsBySession[sessionId][ph]) {
+                        const res = await fetch(`/api/devices/${selectedDeviceId}/history/${sessionId}/${ph}`);
+                        if (!res.ok) throw new Error(`HTTP ${res.status} gagal memuat data sensor ${ph}`);
+                        const historyMap = await res.json();
+                        const arr = [];
+                        Object.entries(historyMap).forEach(([key, val]) => {
+                            if (key !== '_meta') arr.push(val);
+                        });
+                        recordsBySession[sessionId][ph] = arr;
+                    }
+                }));
+                buildSessionUI(); // Refresh UI to show the fetched records
             }
         }
 
-        if (needsFetch) {
-            await Promise.all(phases.map(async (ph) => {
-                if (!recordsBySession[sessionId][ph]) {
-                    const res = await fetch(`/api/devices/${selectedDeviceId}/history/${sessionId}/${ph}`);
-                    const historyMap = await res.json();
-                    const arr = [];
-                    Object.entries(historyMap).forEach(([key, val]) => {
-                        if (key !== '_meta') arr.push(val);
-                    });
-                    recordsBySession[sessionId][ph] = arr;
-                }
-            }));
-            buildSessionUI(); // Refresh UI to show the fetched records
+        const phaseData = recordsBySession[sessionId] || {};
+        const phaseKeys = Object.keys(phaseData).filter(k => /^L\d+$/.test(k)).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+        const totalRecords = phaseKeys.reduce((s, ph) => s + (phaseData[ph]?.length || 0), 0);
+        if (!phaseKeys.length || totalRecords === 0) { 
+            await showModal('Tidak Ada Data', `Sesi "${sessionName}" belum memiliki record.`, 'warning'); 
+            return; 
         }
-    }
 
-    const phaseData = recordsBySession[sessionId] || {};
-    const phaseKeys = Object.keys(phaseData).filter(k => /^L\d+$/.test(k)).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
-    const totalRecords = phaseKeys.reduce((s, ph) => s + (phaseData[ph]?.length || 0), 0);
-    if (!phaseKeys.length || totalRecords === 0) { await showModal('Tidak Ada Data', `Sesi "${sessionName}" belum memiliki record.`, 'warning'); return; }
-    const confirmed = await showModal('Export Sesi',
-        `Ekspor ${totalRecords} record (${phaseKeys.length} sensor) dari sesi:\n"${sessionName}"\n\nData database TIDAK dihapus. Lanjutkan?`, 'info', ['confirm']);
-    if (!confirmed) return;
-    try {
+        const confirmed = await showModal('Export Sesi',
+            `Ekspor ${totalRecords} record (${phaseKeys.length} sensor) dari sesi:\n"${sessionName}"\n\nData database TIDAK dihapus. Lanjutkan?`, 'info', ['confirm']);
+        if (!confirmed) return;
+
         const session = sessionsData[sessionId];
         const deviceName = session?.deviceName || _deviceListCache.find(d => d.id === (session?.deviceId || selectedDeviceId))?.name || selectedDeviceId;
         const wb = XLSX.utils.book_new();
@@ -2953,8 +3127,106 @@ async function exportSession(sessionId, sessionName, event) {
         XLSX.utils.book_append_sheet(wb, wsMeta, 'Summary');
         XLSX.writeFile(wb, `${sessionName.replace(/[\\/:*?"<>|]/g, '_')}.xlsx`);
         await showModal('Export Berhasil!', `${totalRecords} record dari "${sessionName}" berhasil diekspor.`, 'success');
-    } catch (e) { await showModal('Export Gagal', 'Error: ' + e.message, 'error'); }
+    } catch (e) {
+        await showModal('Export Gagal', 'Error: ' + e.message, 'error');
+    } finally {
+        btn.classList.remove('loading');
+        btn.disabled = false;
+        btn.innerHTML = originalHTML;
+    }
 }
+
+async function backupSessionJSON(sessionId, sessionName, event) {
+    event.stopPropagation();
+    
+    // Close dropdowns
+    document.querySelectorAll('.session-dropdown-menu').forEach(el => el.style.display = 'none');
+
+    try {
+        // Ensure all phase data is loaded before backing up
+        const sessionMeta = sessionsData[sessionId];
+        if (sessionMeta) {
+            const phaseNames = sessionMeta.phaseNames || {};
+            const phases = Object.keys(phaseNames).filter(k => /^L\d+$/.test(k));
+            if (!recordsBySession[sessionId]) recordsBySession[sessionId] = {};
+
+            let needsFetch = false;
+            for (const ph of phases) {
+                if (!recordsBySession[sessionId][ph]) {
+                    needsFetch = true;
+                    break;
+                }
+            }
+
+            if (needsFetch) {
+                showGlobalLoader();
+                await Promise.all(phases.map(async (ph) => {
+                    if (!recordsBySession[sessionId][ph]) {
+                        const res = await fetch(`/api/devices/${selectedDeviceId}/history/${sessionId}/${ph}`);
+                        if (!res.ok) throw new Error(`HTTP ${res.status} gagal memuat data sensor ${ph}`);
+                        const historyMap = await res.json();
+                        const arr = [];
+                        Object.entries(historyMap).forEach(([key, val]) => {
+                            if (key !== '_meta') arr.push(val);
+                        });
+                        recordsBySession[sessionId][ph] = arr;
+                    }
+                }));
+                hideGlobalLoader();
+                buildSessionUI();
+            }
+        }
+
+        const phaseData = recordsBySession[sessionId] || {};
+        const phaseKeys = Object.keys(phaseData).filter(k => /^L\d+$/.test(k)).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+        const totalRecords = phaseKeys.reduce((s, ph) => s + (phaseData[ph]?.length || 0), 0);
+        if (!phaseKeys.length || totalRecords === 0) { 
+            await showModal('Tidak Ada Data', `Sesi "${sessionName}" belum memiliki record.`, 'warning'); 
+            return; 
+        }
+
+        const confirmed = await showModal('Backup Sesi JSON',
+            `Unduh cadangan ${totalRecords} record (${phaseKeys.length} sensor) dari sesi:\n"${sessionName}"?\n\nFile ini nantinya dapat dimuat kembali lewat Visualisasi Offline.`, 'info', ['confirm']);
+        if (!confirmed) return;
+
+        // Construct standard backup schema
+        const backupPayload = {
+            schema: "smart-energy-meter-backup",
+            version: "1.0",
+            exportedAt: new Date().toISOString(),
+            session: {
+                id: sessionId,
+                name: sessionName,
+                deviceId: sessionMeta?.deviceId || selectedDeviceId,
+                deviceName: sessionMeta?.deviceName || selectedDeviceName,
+                startTime: sessionMeta?.startTime || '---',
+                endTime: sessionMeta?.endTime || '---',
+                recordCount: totalRecords,
+                phaseNames: sessionMeta?.phaseNames || {}
+            },
+            records: phaseData
+        };
+
+        const jsonString = JSON.stringify(backupPayload, null, 2);
+        const blob = new Blob([jsonString], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${sessionName.replace(/[\\/:*?"<>|]/g, '_')}_backup.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        await showModal('Backup Berhasil!', `File backup JSON berhasil diunduh.`, 'success');
+    } catch (e) {
+        hideGlobalLoader();
+        await showModal('Backup Gagal', 'Error: ' + e.message, 'error');
+    }
+}
+
+
+
 async function clearRecords() {
     if (!historyData.length && !Object.keys(sessionsData).length) { await showModal('Tidak Ada Data', 'Tidak ada history yang perlu dihapus.', 'info'); return; }
     const confirmed = await showModal('Konfirmasi Hapus Record', `Hapus SEMUA sesi & record device "${selectedDeviceName}"?\n\nData TIDAK DAPAT dikembalikan.`, 'warning', ['confirm']);
@@ -3333,10 +3605,38 @@ async function confirmChangeTime() {
     }
 }
 
+function toggleSessionDropdown(sessionId, event) {
+    event.stopPropagation();
+    document.querySelectorAll('.session-dropdown-menu').forEach(el => {
+        if (el.id !== `dropdown_${sessionId}`) el.style.display = 'none';
+    });
+    const dropdown = document.getElementById(`dropdown_${sessionId}`);
+    if (dropdown) {
+        const isShown = dropdown.style.display === 'block';
+        dropdown.style.display = isShown ? 'none' : 'block';
+    }
+}
+
 async function deleteSession(sessionId, sessionName, event) {
     event.stopPropagation();
+    
+    // Close dropdowns
+    document.querySelectorAll('.session-dropdown-menu').forEach(el => el.style.display = 'none');
+
+    const session = sessionsData[sessionId];
+    const isOffline = session && session.isOfflineBackup;
+
     const confirmed = await showModal('Hapus Sesi', `Hapus sesi:\n"${sessionName}"\n\nSemua record akan ikut terhapus.`, 'warning', ['confirm']);
     if (!confirmed) return;
+
+    if (isOffline) {
+        delete sessionsData[sessionId];
+        delete recordsBySession[sessionId];
+        buildSessionUI();
+        await showModal('Sesi Dihapus', `Sesi backup "${sessionName}" berhasil dihapus dari memori.`, 'success');
+        return;
+    }
+
     try {
         const res = await fetch('/api/capture/delete-session', {
             method: 'POST',
@@ -3351,6 +3651,7 @@ async function deleteSession(sessionId, sessionName, event) {
         await showModal('Sesi Dihapus', `Sesi "${sessionName}" berhasil dihapus.`, 'success');
     } catch (e) { await showModal('Error', 'Gagal menghapus! Error: ' + e.message, 'error'); }
 }
+
 async function setCaptureInterval() {
     const val = parseInt($('intervalInput')?.value);
     const multiplier = parseInt($('intervalUnit')?.value);
@@ -3369,7 +3670,444 @@ async function setCaptureInterval() {
     } catch (e) { }
     await showModal('Interval Diperbarui', `Interval diubah menjadi ${val} ${unitLabel}.`, 'success');
 }
+
+// ==========================================
+// OFFLINE VISUALIZER LOGIC (TOOLS TAB)
+// ==========================================
+
+function initOfflineDropZone() {
+    const dz = $('offlineDropZone');
+    if (!dz) return;
+    
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dz.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dz.style.borderColor = 'var(--brand)';
+            dz.style.background = 'color-mix(in srgb, var(--brand) 2%, var(--surface))';
+        }, false);
+    });
+    
+    ['dragleave', 'drop'].forEach(eventName => {
+        dz.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dz.style.borderColor = 'var(--border)';
+            dz.style.background = 'var(--surface)';
+        }, false);
+    });
+    
+    dz.addEventListener('drop', (e) => {
+        const dt = e.dataTransfer;
+        const file = dt.files[0];
+        if (file) {
+            handleOfflineFile(file);
+        }
+    }, false);
+}
+
+async function handleOfflineUpload(event) {
+    const file = event.target.files[0];
+    if (file) {
+        handleOfflineFile(file);
+    }
+    event.target.value = '';
+}
+
+function parseTimestampToEpoch(ts) {
+    if (!ts) return Date.now();
+    try {
+        const cleanTs = ts.replace(/-/g, '/');
+        const epoch = Date.parse(cleanTs);
+        return isNaN(epoch) ? Date.now() : epoch;
+    } catch (e) {
+        return Date.now();
+    }
+}
+
+async function handleOfflineFile(file) {
+    showGlobalLoader();
+    const isXlsx = file.name.endsWith('.xlsx');
+    const isJson = file.name.endsWith('.json');
+    
+    if (!isXlsx && !isJson) {
+        hideGlobalLoader();
+        await showModal('Format Tidak Didukung', 'Hanya berkas berekstensi .xlsx atau .json yang didukung.', 'warning');
+        return;
+    }
+    
+    if (isJson) {
+        const reader = new FileReader();
+        reader.onload = async function(e) {
+            try {
+                const data = JSON.parse(e.target.result);
+                if (data.schema !== 'smart-energy-meter-backup') {
+                    throw new Error("Format file JSON bukan merupakan backup Smart Energy Meter yang valid.");
+                }
+                
+                const session = data.session;
+                const records = data.records;
+                
+                if (!session || !session.id || !records) {
+                    throw new Error("File backup kekurangan data sesi atau data telemetri.");
+                }
+                
+                // Construct standard UI records where keys are capitalized
+                const cleanRecords = {};
+                Object.entries(records).forEach(([ph, arr]) => {
+                    cleanRecords[ph] = arr.map(r => ({
+                        timestamp: r.timestamp || '',
+                        epoch: r.epoch || (r.timestamp ? parseTimestampToEpoch(r.timestamp) : Date.now()),
+                        offline: !!r.offline,
+                        Voltage: r.Voltage != null ? +r.Voltage : (r.voltage != null ? +r.voltage : 0),
+                        Current: r.Current != null ? +r.Current : (r.current != null ? +r.current : 0),
+                        Power: r.Power != null ? +r.Power : (r.power != null ? +r.power : 0),
+                        Frequency: r.Frequency != null ? +r.Frequency : (r.frequency != null ? +r.frequency : 0),
+                        Energy: r.Energy != null ? +r.Energy : (r.energy != null ? +r.energy : 0),
+                        PowerFactor: r.PowerFactor != null ? +r.PowerFactor : (r.powerFactor != null ? +r.powerFactor : (r.Power_Factor != null ? +r.Power_Factor : 1))
+                    }));
+                });
+
+                if (!session.phases) {
+                    session.phases = Object.keys(cleanRecords).filter(k => /^L\d+$/.test(k) || k !== 'Summary');
+                }
+                
+                activeOfflineSessionData = {
+                    session: session,
+                    records: cleanRecords
+                };
+                
+                hideGlobalLoader();
+                await showModal('Visualisasi Berhasil', `File backup JSON sesi "${session.name}" berhasil dimuat secara offline.`, 'success');
+                renderOfflineWorkspace();
+            } catch (err) {
+                hideGlobalLoader();
+                await showModal('Pemuatan Gagal', 'Error: ' + err.message, 'error');
+            }
+        };
+        reader.readAsText(file);
+    } else {
+        const reader = new FileReader();
+        reader.onload = async function(e) {
+            try {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                
+                let sessionName = file.name.replace('.xlsx', '');
+                let deviceId = 'OFFLINE_DEV';
+                let deviceName = 'Offline Device';
+                let startTime = '---';
+                let endTime = '---';
+                const records = {};
+                
+                // Parse metadata sheet if available
+                if (workbook.SheetNames.includes('Summary')) {
+                    const summarySheet = workbook.Sheets['Summary'];
+                    const summaryRows = XLSX.utils.sheet_to_json(summarySheet, { header: 1 });
+                    summaryRows.forEach(row => {
+                        if (row && row.length >= 2) {
+                            const key = String(row[0]).trim();
+                            const val = String(row[1]).trim();
+                            if (key === 'Nama Sesi') sessionName = val;
+                            if (key === 'Device Name') deviceName = val;
+                            if (key === 'Waktu Mulai') startTime = val;
+                            if (key === 'Waktu Selesai') endTime = val;
+                        }
+                    });
+                }
+                
+                // Parse other sheets as phases
+                workbook.SheetNames.forEach(sheetName => {
+                    if (sheetName === 'Summary') return;
+                    
+                    const ws = workbook.Sheets[sheetName];
+                    const rows = XLSX.utils.sheet_to_json(ws);
+                    if (!rows.length) return;
+                    
+                    const mapped = rows.map(r => {
+                        const timestamp = r['Timestamp'] || '';
+                        const offline = String(r['Status'] || '').toUpperCase() === 'OFFLINE';
+                        
+                        const getVal = (field) => {
+                            const val = r[field];
+                            return val != null ? parseFloat(val) : 0;
+                        };
+                        
+                        return {
+                            timestamp,
+                            epoch: timestamp ? parseTimestampToEpoch(timestamp) : Date.now(),
+                            offline,
+                            Voltage: getVal('Voltage (V)'),
+                            Current: getVal('Current (A)'),
+                            Power: getVal('Power (W)'),
+                            Frequency: getVal('Frequency (Hz)'),
+                            Energy: getVal('Active Energy (kWh)'),
+                            PowerFactor: getVal('Power Factor')
+                        };
+                    });
+                    
+                    records[sheetName] = mapped;
+                });
+                
+                const phases = Object.keys(records);
+                if (!phases.length) {
+                    throw new Error("File Excel tidak berisi sheet sensor telemetri yang valid.");
+                }
+                
+                activeOfflineSessionData = {
+                    session: {
+                        id: 'offline_' + Date.now(),
+                        name: sessionName,
+                        deviceId: deviceId,
+                        deviceName: deviceName,
+                        startTime: startTime,
+                        endTime: endTime,
+                        recordCount: Object.values(records).reduce((sum, arr) => sum + arr.length, 0),
+                        phases: phases
+                    },
+                    records: records
+                };
+                
+                hideGlobalLoader();
+                await showModal('Visualisasi Berhasil', `File Excel sesi "${sessionName}" berhasil dimuat secara offline.`, 'success');
+                renderOfflineWorkspace();
+                
+            } catch (err) {
+                hideGlobalLoader();
+                await showModal('Pemuatan Gagal', 'Error: ' + err.message, 'error');
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    }
+}
+
+function renderOfflineWorkspace() {
+    const sectionUploader = $('offlineUploaderSection');
+    const sectionWorkspace = $('offlineWorkspaceSection');
+    if (!sectionUploader || !sectionWorkspace) return;
+
+    sectionUploader.style.display = 'none';
+    sectionWorkspace.style.display = 'block';
+
+    const s = activeOfflineSessionData.session;
+    $('owSessionName').textContent = s.name || 'Tanpa nama';
+    $('owMetaText').innerHTML = `Device: <strong>${s.deviceName}</strong> &middot; Start: <strong>${s.startTime}</strong> &middot; End: <strong>${s.endTime}</strong> &middot; Records: <strong>${s.recordCount}</strong>`;
+
+    activeOfflineSelectedPhase = s.phases[0] || '';
+    
+    // Render tabs
+    const tabsWrap = $('owSensorTabs');
+    if (tabsWrap) {
+        tabsWrap.innerHTML = s.phases.map(ph => {
+            return `<button class="sensor-tab-btn ${ph === activeOfflineSelectedPhase ? 'active' : ''}" onclick="switchOfflineSensorTab('${ph}')">${ph}</button>`;
+        }).join('');
+    }
+
+    // Reset param selector to Power
+    const paramSelect = $('owParamSelect');
+    if (paramSelect) paramSelect.value = 'Power';
+
+    activeOfflineSelectedPage = 1;
+    renderOfflineChart();
+    renderOfflineTable();
+}
+
+function resetOfflineWorkspace() {
+    activeOfflineSessionData = null;
+    activeOfflineSelectedPhase = '';
+    activeOfflineSelectedPage = 1;
+    if (activeOfflineChart) {
+        activeOfflineChart.destroy();
+        activeOfflineChart = null;
+    }
+
+    const sectionUploader = $('offlineUploaderSection');
+    const sectionWorkspace = $('offlineWorkspaceSection');
+    if (sectionUploader) sectionUploader.style.display = 'block';
+    if (sectionWorkspace) sectionWorkspace.style.display = 'none';
+}
+
+function switchOfflineSensorTab(phase) {
+    activeOfflineSelectedPhase = phase;
+    
+    // Update active tab button style
+    document.querySelectorAll('#owSensorTabs .sensor-tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent === phase);
+    });
+
+    activeOfflineSelectedPage = 1;
+    renderOfflineTable();
+}
+
+function onOwParamChange() {
+    renderOfflineChart();
+}
+
+function renderOfflineChart() {
+    const ctx = document.getElementById('owChartCanvas');
+    if (!ctx) return;
+
+    if (activeOfflineChart) {
+        activeOfflineChart.destroy();
+        activeOfflineChart = null;
+    }
+
+    if (!activeOfflineSessionData) return;
+
+    // Collect all timestamps to build a common X-axis
+    const allTimestampsSet = new Set();
+    Object.values(activeOfflineSessionData.records).forEach(arr => {
+        arr.forEach(r => {
+            if (r.timestamp) allTimestampsSet.add(r.timestamp);
+        });
+    });
+
+    const sortedTimestamps = Array.from(allTimestampsSet).sort((a, b) => parseTimestampToEpoch(a) - parseTimestampToEpoch(b));
+    let chartLabels = sortedTimestamps;
+    if (chartLabels.length > 120) {
+        const step = Math.ceil(chartLabels.length / 120);
+        chartLabels = chartLabels.filter((_, idx) => idx % step === 0);
+    }
+
+    const param = $('owParamSelect')?.value || 'Power';
+
+    const datasets = activeOfflineSessionData.session.phases.map((ph, idx) => {
+        const records = activeOfflineSessionData.records[ph] || [];
+        const dataMap = {};
+        records.forEach(r => {
+            if (r.timestamp) dataMap[r.timestamp] = r;
+        });
+
+        const dataPoints = chartLabels.map(ts => {
+            const rec = dataMap[ts];
+            return rec ? (rec[param] != null ? rec[param] : 0) : null;
+        });
+
+        const phaseColors = ['#00A651', '#1E90FF', '#FF8C00', '#8A2BE2', '#FF1493', '#00CED1'];
+        const color = phaseColors[idx % phaseColors.length];
+
+        return {
+            label: ph,
+            data: dataPoints,
+            borderColor: color,
+            backgroundColor: color + '0a',
+            borderWidth: 2,
+            pointRadius: chartLabels.length > 60 ? 0 : 3,
+            fill: false,
+            tension: 0.15,
+            spanGaps: true
+        };
+    });
+
+    activeOfflineChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: chartLabels.map(ts => ts.split(' ')[1] || ts),
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        boxWidth: 12,
+                        font: { family: 'var(--font-ui)', weight: 'bold', size: 11 },
+                        color: 'var(--text-secondary)'
+                    }
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false
+                }
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: {
+                        maxTicksLimit: 10,
+                        font: { family: 'var(--font-ui)', size: 9.5 },
+                        color: 'var(--text-tertiary)'
+                    }
+                },
+                y: {
+                    grid: { color: 'rgba(0,0,0,0.03)' },
+                    title: {
+                        display: true,
+                        text: param,
+                        font: { family: 'var(--font-ui)', weight: 'bold', size: 11 },
+                        color: 'var(--text-secondary)'
+                    },
+                    ticks: {
+                        font: { family: 'var(--font-ui)', size: 9.5 },
+                        color: 'var(--text-tertiary)'
+                    }
+                }
+            }
+        }
+    });
+}
+
+function renderOfflineTable() {
+    const tbody = $('owTableBody');
+    if (!tbody || !activeOfflineSessionData || !activeOfflineSelectedPhase) return;
+
+    const records = activeOfflineSessionData.records[activeOfflineSelectedPhase] || [];
+    const sorted = records.slice().sort((a, b) => parseTimestampToEpoch(b.timestamp) - parseTimestampToEpoch(a.timestamp));
+
+    const pageSize = 20;
+    const totalPages = Math.ceil(sorted.length / pageSize);
+    const page = Math.max(1, Math.min(activeOfflineSelectedPage, totalPages));
+    activeOfflineSelectedPage = page;
+
+    const slice = sorted.slice((page - 1) * pageSize, page * pageSize);
+
+    if (!slice.length) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-tertiary)">Tidak ada data.</td></tr>`;
+        $('owPaginationBar').innerHTML = '';
+        return;
+    }
+
+    tbody.innerHTML = slice.map(r => {
+        const isOff = r.offline;
+        return `<tr class="inner-record-row ${isOff ? 'record-offline' : ''}">
+            <td>${r.timestamp || '---'}</td>
+            <td style="text-align:right">${r.Voltage != null ? r.Voltage.toFixed(2) : '---'}</td>
+            <td style="text-align:right">${r.Current != null ? r.Current.toFixed(2) : '---'}</td>
+            <td style="text-align:right; font-weight:700; color:${isOff ? 'inherit' : 'var(--brand)'}">${r.Power != null ? r.Power.toFixed(2) : '---'}</td>
+            <td style="text-align:right">${r.Frequency != null ? r.Frequency.toFixed(1) : '---'}</td>
+            <td style="text-align:right">${r.Energy != null ? r.Energy.toFixed(4) : '---'}</td>
+            <td style="text-align:right">${r.PowerFactor != null ? r.PowerFactor.toFixed(4) : '---'}</td>
+        </tr>`;
+    }).join('');
+
+    if (totalPages > 1) {
+        $('owPaginationBar').innerHTML = _renderOfflinePaginationBar(page, totalPages, sorted.length);
+    } else {
+        $('owPaginationBar').innerHTML = '';
+    }
+}
+
+function _renderOfflinePaginationBar(page, totalPages, totalCount) {
+    return `<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+        <span style="font-size:11.5px; color:var(--text-tertiary); font-weight:600">Menampilkan ${Math.min(totalCount, (page - 1) * 20 + 1)}-${Math.min(totalCount, page * 20)} dari ${totalCount} record</span>
+        <div style="display:flex; gap:4px">
+            <button class="time-filter-btn" ${page <= 1 ? 'disabled style="opacity:0.4;cursor:not-allowed"' : ''} onclick="goOfflineTablePage(${page - 1})">Sebelumnya</button>
+            <span style="display:flex; align-items:center; padding:0 10px; font-size:12px; font-weight:700; color:var(--text-secondary)">Halaman ${page} / ${totalPages}</span>
+            <button class="time-filter-btn" ${page >= totalPages ? 'disabled style="opacity:0.4;cursor:not-allowed"' : ''} onclick="goOfflineTablePage(${page + 1})">Berikutnya</button>
+        </div>
+    </div>`;
+}
+
+function goOfflineTablePage(page) {
+    activeOfflineSelectedPage = page;
+    renderOfflineTable();
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+    initOfflineDropZone();
     updateDateNavigatorUI();
     initChart();
     DOM.paramSelect?.addEventListener('change', changeParameter);
@@ -3396,6 +4134,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     $('intervalUnit')?.addEventListener('change', () => { _intervalUserEdited = true; });
     $('sessionNameInput')?.addEventListener('keydown', e => {
         if (e.key === 'Enter') { _renamingSessionId ? confirmRenameSession() : confirmStartCapture(); }
+    });
+    document.addEventListener('click', () => {
+        document.querySelectorAll('.session-dropdown-menu').forEach(el => el.style.display = 'none');
     });
 });
 window.addEventListener('beforeunload', () => {

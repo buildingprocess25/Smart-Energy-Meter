@@ -62,25 +62,35 @@ Ada **dua cara**. Pilih salah satu:
 
 **Prasyarat:** Python 3.11+, sudah punya akses ke PostgreSQL & MQTT broker.
 
-# 1. Aktifkan virtual environment (sesuaikan dengan terminal Anda):
-# Di PowerShell:
-.venv\Scripts\Activate.ps1
-# (Jika muncul error permission di PowerShell, jalankan ini dulu: Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process)
+1. **Aktifkan virtual environment** (sesuaikan dengan terminal Anda):
 
-# Di Command Prompt (CMD):
-.venv\Scripts\activate.bat
+   * **Di PowerShell:**
+     ```powershell
+     .venv\Scripts\Activate.ps1
+     ```
+     *(Jika muncul error permission di PowerShell, jalankan ini dulu: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process`)*
 
-# Di Git Bash:
-source .venv/Scripts/activate
+   * **Di Command Prompt (CMD):**
+     ```cmd
+     .venv\Scripts\activate.bat
+     ```
 
-# 2. Install dependensi (cukup sekali, atau jika requirements.txt berubah)
-pip install -r backend/requirements.txt
+   * **Di Git Bash / Linux / macOS:**
+     ```bash
+     source .venv/Scripts/activate
+     ```
 
-# 3. Pastikan file .env sudah ada di root folder (lihat bagian Konfigurasi di bawah)
+2. **Install dependensi** (cukup sekali, atau jika `requirements.txt` berubah):
+   ```bash
+   pip install -r backend/requirements.txt
+   ```
 
-# 4. Jalankan backend Flask
-python backend/app.py
-```
+3. **Pastikan file `.env` sudah ada** di root folder (lihat bagian Konfigurasi di bawah).
+
+4. **Jalankan backend Flask:**
+   ```bash
+   python backend/app.py
+   ```
 
 Setelah muncul output seperti `Running on http://0.0.0.0:5000`, buka browser ke:
 **➜ http://localhost:5000**

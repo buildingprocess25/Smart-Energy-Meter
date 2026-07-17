@@ -60,7 +60,13 @@
                     <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
                     <path d="M3 5v6c0 1.7 4 3 9 3s9-1.3 9-3V5M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6"></path>
                 </svg>
-                Database
+                History
+            </button>
+            <button class="tab-btn" id="toolsTab" onclick="switchTab('tools')">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+                </svg>
+                Tools
             </button>
             <button class="tab-btn" id="settingsTab" onclick="switchTab('settings')">
                 <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -259,6 +265,101 @@
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                </div>
+            </div>
+            <div id="toolsContent" class="tab-content">
+                <!-- Dropzone Area -->
+                <div class="offline-uploader-container" id="offlineUploaderSection">
+                    <div class="drop-zone" id="offlineDropZone" onclick="document.getElementById('offlineFileInput').click()">
+                        <div class="drop-zone-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                        </div>
+                        <h3>Visualisasi Data</h3>
+                        <p>Seret & lepas berkas cadangan <strong>Excel (.xlsx)</strong> atau <strong>JSON</strong> hasil ekspor di sini</p>
+                        <span class="drop-zone-browse">atau cari berkas dari komputer</span>
+                        <input type="file" id="offlineFileInput" accept=".xlsx,.json" style="display:none" onchange="handleOfflineUpload(event)">
+                    </div>
+                </div>
+
+                <!-- Visualizer Workspace (Hidden by default until file is parsed) -->
+                <div class="offline-workspace" id="offlineWorkspaceSection" style="display:none">
+                    <div class="offline-workspace-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:12px;">
+                        <div class="ow-header-info">
+                            <h2 id="owSessionName" style="font-size:18px; font-weight:800; color:var(--text-primary); letter-spacing:-0.3px;">Nama Sesi</h2>
+                            <p id="owMetaText" style="color:var(--text-tertiary); font-size:12px; margin-top:3px; font-weight:600;">Loading...</p>
+                        </div>
+                        <button class="control-btn btn-reset" onclick="resetOfflineWorkspace()" style="margin:0; padding:10px 16px; font-size:12px; height:40px; display:flex; align-items:center; gap:8px; border:none; background:var(--brand-muted); color:var(--brand); border-radius: var(--radius-md) 0 var(--radius-md) 0; font-weight:700; cursor:pointer;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                <polyline points="23 4 23 10 17 10"></polyline>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                            </svg>
+                            Unggah File Lain
+                        </button>
+                    </div>
+
+                    <!-- Line Chart Visualizer Card -->
+                    <div class="control-card" style="margin-bottom:16px; padding:20px 24px;">
+                        <div class="control-header" style="justify-content:space-between; align-items:center;">
+                            <div class="control-header-text">
+                                <h4>Grafik Telemetri Sesi</h4>
+                                <p>Visualisasi parameter sensor yang terekam dalam file</p>
+                            </div>
+                            <div style="display:flex; gap:10px; align-items:center">
+                                <select id="owParamSelect" class="settings-device-select" style="width:160px; height:36px; padding:0 12px; font-size:12px; margin:0" onchange="onOwParamChange()">
+                                    <option value="Power">Power (W)</option>
+                                    <option value="Voltage">Voltage (V)</option>
+                                    <option value="Current">Current (A)</option>
+                                    <option value="Frequency">Frequency (Hz)</option>
+                                    <option value="Energy">Energy (kWh)</option>
+                                    <option value="PowerFactor">Power Factor</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="control-divider"></div>
+                        <div style="height:320px; position:relative; width:100%">
+                            <canvas id="owChartCanvas"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Sensor Tabbed Tables -->
+                    <div class="control-card control-card-fill" style="padding:20px 24px;">
+                        <div class="control-header" style="justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px">
+                            <div class="control-header-text">
+                                <h4>Data Telemetri per Sensor</h4>
+                                <p>Detail rekaman angka historis dari berkas</p>
+                            </div>
+                            <div class="sensor-tabs-wrap" id="owSensorTabs" style="display:flex; gap:6px">
+                                <!-- Dynamic tabs for L1, L2, L3 etc -->
+                            </div>
+                        </div>
+                        <div class="control-divider"></div>
+                        <div class="table-container" style="margin-top:0">
+                            <div class="table-scroll">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Timestamp</th>
+                                            <th style="text-align:right">Voltage (V)</th>
+                                            <th style="text-align:right">Current (A)</th>
+                                            <th style="text-align:right">Power (W)</th>
+                                            <th style="text-align:right">Frequency (Hz)</th>
+                                            <th style="text-align:right">Energy (kWh)</th>
+                                            <th style="text-align:right">PF</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="owTableBody">
+                                        <!-- Dynamic rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+                            <!-- Pagination Bar -->
+                            <div id="owPaginationBar" style="margin-top:12px"></div>
+                        </div>
                     </div>
                 </div>
             </div>
