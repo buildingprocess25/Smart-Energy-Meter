@@ -987,6 +987,7 @@ def capture_shift_time():
 @app.route('/api/devices/<device_id>/sessions')
 def get_sessions(device_id: str):
     try:
+        clean_did = device_id.strip().rstrip(':').strip()
         with get_db_cursor() as cur:
             cur.execute("""
                 SELECT session_id, session_name,
@@ -996,10 +997,10 @@ def get_sessions(device_id: str):
                        MIN(epoch) as start_epoch,
                        ARRAY_AGG(DISTINCT phase ORDER BY phase) as phases
                 FROM history h
-                WHERE device_id = %s
+                WHERE device_id = %s OR device_id = %s
                 GROUP BY session_id, session_name
                 ORDER BY start_epoch DESC
-            """, (device_id,))
+            """, (device_id, clean_did))
             rows = cur.fetchall()
 
         # Ambil nama device dari database
@@ -1058,13 +1059,14 @@ def get_sessions(device_id: str):
 def get_session_history_all(device_id: str, session_id: str):
     """Batch fetch all phases for a session in a single optimized DB query."""
     try:
+        clean_did = device_id.strip().rstrip(':').strip()
         with get_db_cursor() as cur:
             cur.execute("""
                 SELECT phase, timestamp, epoch, voltage, current, power, frequency, energy, power_factor, offline
                 FROM history
-                WHERE device_id = %s AND session_id = %s
+                WHERE (device_id = %s OR device_id = %s) AND session_id = %s
                 ORDER BY epoch ASC
-            """, (device_id, session_id))
+            """, (device_id, clean_did, session_id))
             rows = cur.fetchall()
 
         import math
@@ -1108,13 +1110,14 @@ def get_session_history_all(device_id: str, session_id: str):
 def get_session_history_phase(device_id: str, session_id: str, phase: str):
     try:
         phase = phase.upper()
+        clean_did = device_id.strip().rstrip(':').strip()
         with get_db_cursor() as cur:
             cur.execute("""
                 SELECT timestamp, epoch, voltage, current, power, frequency, energy, power_factor, offline
                 FROM history
-                WHERE device_id = %s AND session_id = %s AND phase = %s
+                WHERE (device_id = %s OR device_id = %s) AND session_id = %s AND phase = %s
                 ORDER BY epoch ASC
-            """, (device_id, session_id, phase))
+            """, (device_id, clean_did, session_id, phase))
             rows = cur.fetchall()
             
         import math

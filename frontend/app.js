@@ -3331,9 +3331,20 @@ async function _refreshActiveSessionRecords() {
     }
 }
 
+let _statusPollErrorCount = 0;
 async function syncCaptureStatus() {
+    if (_statusPollErrorCount > 0 && _statusPollErrorCount < 3) {
+        _statusPollErrorCount++;
+        return;
+    }
     try {
-        const status = await fetch('/api/capture/status').then(r => r.json());
+        const res = await fetch('/api/capture/status');
+        if (!res.ok) {
+            _statusPollErrorCount = 1;
+            return;
+        }
+        _statusPollErrorCount = 0;
+        const status = await res.json();
         if (!_captureTransitioning) {
             if (status.active) {
                 captureActive = true;
