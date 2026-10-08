@@ -2648,6 +2648,8 @@ const _sessionCharts = {};
 const _activeHistoryFetches = new Set();
 const _activeHistoryCallbacks = {};
 
+const _sleep = ms => new Promise(r => setTimeout(r, ms));
+
 async function _ensureSessionHistoryLoaded(sessionId) {
     const sessionMeta = sessionsData[sessionId];
     if (!sessionMeta) return;
@@ -2659,42 +2661,56 @@ async function _ensureSessionHistoryLoaded(sessionId) {
     if (!phases.length && sessionMeta.phases) {
         phases = sessionMeta.phases.filter(k => /^L\d+$/.test(k));
     }
+    if (!phases.length) {
+        phases = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10', 'L11', 'L12', 'L13', 'L14'];
+    }
 
     const missingPhases = phases.filter(ph => !recordsBySession[sessionId][ph]);
-    if (missingPhases.length === 0 && phases.length > 0) {
+    if (missingPhases.length === 0) {
         return; // Sudah terisi lengkap di memori
     }
 
-    // 1. Coba batch fetch seluruh session dalam 1 HTTP request
-    try {
-        const res = await fetch(`/api/devices/${encodeURIComponent(devId)}/history/${sessionId}`);
-        if (res.ok) {
-            const allMap = await res.json();
-            Object.entries(allMap).forEach(([ph, historyMap]) => {
+    // Ambil secara bertahap satu per satu (pure sequential) agar Render 512MB RAM tidak crash OOM
+    for (let i = 0; i < missingPhases.length; i++) {
+        const ph = missingPhases[i];
+        if (recordsBySession[sessionId][ph]) continue;
+
+        let attempts = 0;
+        let success = false;
+        let lastError = null;
+
+        while (attempts < 3 && !success) {
+            attempts++;
+            try {
+                const res = await fetch(`/api/devices/${encodeURIComponent(devId)}/history/${sessionId}/${ph}`);
+                if (res.status === 429 || res.status === 503 || res.status === 502) {
+                    // Server sibuk / rate-limited: tunggu 1.5s lalu retry
+                    await _sleep(1500);
+                    continue;
+                }
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status} gagal memuat data sensor ${ph}`);
+                }
+                const historyMap = await res.json();
                 const arr = [];
-                Object.entries(historyMap).forEach(([k, val]) => {
-                    if (k !== '_meta') arr.push(val);
+                Object.entries(historyMap).forEach(([key, val]) => {
+                    if (key !== '_meta') arr.push(val);
                 });
                 recordsBySession[sessionId][ph] = arr;
-            });
-            return;
+                success = true;
+            } catch (err) {
+                lastError = err;
+                if (attempts < 3) await _sleep(1000);
+            }
         }
-    } catch (batchErr) {
-        console.warn("Batch session fetch failed, falling back to sequential fetch:", batchErr);
-    }
 
-    // 2. Fallback: ambil bertahap secara sequential untuk hindari HTTP 502 overload
-    for (const ph of missingPhases) {
-        if (!recordsBySession[sessionId][ph]) {
-            const res = await fetch(`/api/devices/${encodeURIComponent(devId)}/history/${sessionId}/${ph}`);
-            if (!res.ok) throw new Error(`HTTP ${res.status} gagal memuat data sensor ${ph}`);
-            const historyMap = await res.json();
-            const arr = [];
-            Object.entries(historyMap).forEach(([key, val]) => {
-                if (key !== '_meta') arr.push(val);
-            });
-            recordsBySession[sessionId][ph] = arr;
+        if (!success && lastError) {
+            console.error(`Gagal memuat sensor ${ph} setelah 3 percobaan:`, lastError);
+            throw lastError;
         }
+
+        // Jeda 80ms antar sensor agar garbage collector server membebaskan RAM
+        await _sleep(80);
     }
 }
 
@@ -3297,8 +3313,9 @@ async function _refreshActiveSessionRecords() {
     if (openPhasesOfActiveSession.length === 0) return;
     
     try {
-        await Promise.all(openPhasesOfActiveSession.map(async (phase) => {
-            const res = await fetch(`/api/devices/${selectedDeviceId}/history/${currentSessionId}/${phase}`);
+        for (const phase of openPhasesOfActiveSession) {
+            const res = await fetch(`/api/devices/${encodeURIComponent(selectedDeviceId)}/history/${currentSessionId}/${phase}`);
+            if (!res.ok) continue;
             const historyMap = await res.json();
             if (!recordsBySession[currentSessionId]) recordsBySession[currentSessionId] = {};
             const arr = [];
@@ -3325,7 +3342,7 @@ async function _refreshActiveSessionRecords() {
                 }).join('') : '';
 
             }
-        }));
+        }
     } catch (e) {
         console.error("Error auto-refreshing active session records:", e);
     }

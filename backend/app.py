@@ -1069,7 +1069,6 @@ def get_session_history_all(device_id: str, session_id: str):
             """, (device_id, clean_did, session_id))
             rows = cur.fetchall()
 
-        import math
         history_by_phase = {}
         for row in rows:
             ph, ts, epoch_val, v, c, w, hz, kwh, pf, offline = row
@@ -1077,29 +1076,16 @@ def get_session_history_all(device_id: str, session_id: str):
                 history_by_phase[ph] = {}
 
             key = f'capture_{epoch_val}'
-            apparent = (v * c) / 1000.0
-            power_kw = w / 1000.0
-            reactive = math.sqrt(max(0.0, (apparent ** 2) - (power_kw ** 2)))
-            try:
-                phase_angle = math.acos(max(-1.0, min(1.0, pf))) * 180.0 / math.pi
-            except:
-                phase_angle = 0.0
-
             history_by_phase[ph][key] = {
                 'timestamp': ts,
                 'epoch': epoch_val,
-                'offline': offline,
+                'offline': bool(offline),
                 'Voltage': v,
                 'Current': c,
                 'Power': w,
                 'Frequency': hz,
                 'Energy': kwh,
                 'PowerFactor': pf,
-                'Apparent': round(apparent, 4),
-                'Reactive': round(reactive, 4),
-                'Phase1': round(phase_angle, 2),
-                'EnergyApparent': 0.0,
-                'EnergyReactive': 0.0
             }
         return jsonify(history_by_phase)
     except Exception as e:
@@ -1119,57 +1105,22 @@ def get_session_history_phase(device_id: str, session_id: str, phase: str):
                 ORDER BY epoch ASC
             """, (device_id, clean_did, session_id, phase))
             rows = cur.fetchall()
-            
-        import math
+
         history = {}
         for row in rows:
             ts, epoch_val, v, c, w, hz, kwh, pf, offline = row
             key = f'capture_{epoch_val}'
-            
-            apparent = (v * c) / 1000.0
-            power_kw = w / 1000.0
-            reactive = math.sqrt(max(0.0, (apparent ** 2) - (power_kw ** 2)))
-            try:
-                phase_angle = math.acos(max(-1.0, min(1.0, pf))) * 180.0 / math.pi
-            except:
-                phase_angle = 0.0
-                
             history[key] = {
                 'timestamp': ts,
                 'epoch': epoch_val,
-                'offline': offline,
+                'offline': bool(offline),
                 'Voltage': v,
                 'Current': c,
                 'Power': w,
                 'Frequency': hz,
                 'Energy': kwh,
                 'PowerFactor': pf,
-                'Apparent': round(apparent, 4),
-                'Reactive': round(reactive, 4),
-                'Phase1': round(phase_angle, 2),
-                'EnergyApparent': 0.0,
-                'EnergyReactive': 0.0
             }
-            
-        if history:
-            with get_db_cursor() as cur:
-                cur.execute("""
-                    SELECT session_name, MIN(timestamp), MAX(timestamp), COUNT(*)
-                    FROM history
-                    WHERE device_id = %s AND session_id = %s
-                    GROUP BY session_name
-                """, (device_id, session_id))
-                m_row = cur.fetchone()
-            if m_row:
-                sname, start, end, count = m_row
-                history['_meta'] = {
-                    'id': session_id,
-                    'name': sname,
-                    'deviceId': device_id,
-                    'startTime': start,
-                    'endTime': end,
-                    'recordCount': count
-                }
         return jsonify(history)
     except Exception as e:
         print(f"Error in get_session_history_phase: {e}")
