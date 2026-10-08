@@ -2406,7 +2406,8 @@ function clearDbSearch() {
 let historyData = [], recordsBySession = {};
 async function _attachHistoryListener(deviceId) {
     try {
-        const res = await fetch(`/api/devices/${deviceId}/sessions`);
+        const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/sessions`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const list = await res.json();
 
         let totalCount = 0;
@@ -2621,13 +2622,10 @@ function toggleSessionDetail(sessionId) {
                 </div>`;
             }
             
-            Promise.all(phaseKeys.map(phase => {
-                return new Promise((resolve) => {
-                    _fetchPhaseHistory(sessionId, phase, (data) => {
-                        resolve(data);
-                    });
-                });
-            })).then(() => {
+            _ensureSessionHistoryLoaded(sessionId).then(() => {
+                renderSessionDashboard(sessionId);
+            }).catch(err => {
+                console.error("Error loading session history:", err);
                 renderSessionDashboard(sessionId);
             });
         }
@@ -2650,6 +2648,56 @@ const _sessionCharts = {};
 const _activeHistoryFetches = new Set();
 const _activeHistoryCallbacks = {};
 
+async function _ensureSessionHistoryLoaded(sessionId) {
+    const sessionMeta = sessionsData[sessionId];
+    if (!sessionMeta) return;
+
+    if (!recordsBySession[sessionId]) recordsBySession[sessionId] = {};
+    const devId = sessionMeta.deviceId || selectedDeviceId;
+    const phaseNames = sessionMeta.phaseNames || {};
+    let phases = Object.keys(phaseNames).filter(k => /^L\d+$/.test(k));
+    if (!phases.length && sessionMeta.phases) {
+        phases = sessionMeta.phases.filter(k => /^L\d+$/.test(k));
+    }
+
+    const missingPhases = phases.filter(ph => !recordsBySession[sessionId][ph]);
+    if (missingPhases.length === 0 && phases.length > 0) {
+        return; // Sudah terisi lengkap di memori
+    }
+
+    // 1. Coba batch fetch seluruh session dalam 1 HTTP request
+    try {
+        const res = await fetch(`/api/devices/${encodeURIComponent(devId)}/history/${sessionId}`);
+        if (res.ok) {
+            const allMap = await res.json();
+            Object.entries(allMap).forEach(([ph, historyMap]) => {
+                const arr = [];
+                Object.entries(historyMap).forEach(([k, val]) => {
+                    if (k !== '_meta') arr.push(val);
+                });
+                recordsBySession[sessionId][ph] = arr;
+            });
+            return;
+        }
+    } catch (batchErr) {
+        console.warn("Batch session fetch failed, falling back to sequential fetch:", batchErr);
+    }
+
+    // 2. Fallback: ambil bertahap secara sequential untuk hindari HTTP 502 overload
+    for (const ph of missingPhases) {
+        if (!recordsBySession[sessionId][ph]) {
+            const res = await fetch(`/api/devices/${encodeURIComponent(devId)}/history/${sessionId}/${ph}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status} gagal memuat data sensor ${ph}`);
+            const historyMap = await res.json();
+            const arr = [];
+            Object.entries(historyMap).forEach(([key, val]) => {
+                if (key !== '_meta') arr.push(val);
+            });
+            recordsBySession[sessionId][ph] = arr;
+        }
+    }
+}
+
 function _fetchPhaseHistory(sessionId, phase, cb) {
     if (recordsBySession[sessionId]?.[phase]) {
         if (cb) cb(recordsBySession[sessionId][phase]);
@@ -2668,8 +2716,11 @@ function _fetchPhaseHistory(sessionId, phase, cb) {
         if (!_activeHistoryCallbacks[key]) _activeHistoryCallbacks[key] = [];
         _activeHistoryCallbacks[key].push(cb);
     }
-    fetch(`/api/devices/${selectedDeviceId}/history/${sessionId}/${phase}`)
-        .then(res => res.json())
+    fetch(`/api/devices/${encodeURIComponent(selectedDeviceId)}/history/${sessionId}/${phase}`)
+        .then(res => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json();
+        })
         .then(historyMap => {
             if (!recordsBySession[sessionId]) recordsBySession[sessionId] = {};
             const arr = [];
@@ -3073,33 +3124,8 @@ async function exportSession(sessionId, sessionName, event) {
         // Ensure all phase data is loaded before exporting
         const sessionMeta = sessionsData[sessionId];
         if (sessionMeta) {
-            const phaseNames = sessionMeta.phaseNames || {};
-            const phases = Object.keys(phaseNames).filter(k => /^L\d+$/.test(k));
-            if (!recordsBySession[sessionId]) recordsBySession[sessionId] = {};
-
-            let needsFetch = false;
-            for (const ph of phases) {
-                if (!recordsBySession[sessionId][ph]) {
-                    needsFetch = true;
-                    break;
-                }
-            }
-
-            if (needsFetch) {
-                await Promise.all(phases.map(async (ph) => {
-                    if (!recordsBySession[sessionId][ph]) {
-                        const res = await fetch(`/api/devices/${selectedDeviceId}/history/${sessionId}/${ph}`);
-                        if (!res.ok) throw new Error(`HTTP ${res.status} gagal memuat data sensor ${ph}`);
-                        const historyMap = await res.json();
-                        const arr = [];
-                        Object.entries(historyMap).forEach(([key, val]) => {
-                            if (key !== '_meta') arr.push(val);
-                        });
-                        recordsBySession[sessionId][ph] = arr;
-                    }
-                }));
-                buildSessionUI(); // Refresh UI to show the fetched records
-            }
+            await _ensureSessionHistoryLoaded(sessionId);
+            buildSessionUI(); // Refresh UI to show the fetched records
         }
 
         const phaseData = recordsBySession[sessionId] || {};
@@ -3172,35 +3198,10 @@ async function backupSessionJSON(sessionId, sessionName, event) {
         // Ensure all phase data is loaded before backing up
         const sessionMeta = sessionsData[sessionId];
         if (sessionMeta) {
-            const phaseNames = sessionMeta.phaseNames || {};
-            const phases = Object.keys(phaseNames).filter(k => /^L\d+$/.test(k));
-            if (!recordsBySession[sessionId]) recordsBySession[sessionId] = {};
-
-            let needsFetch = false;
-            for (const ph of phases) {
-                if (!recordsBySession[sessionId][ph]) {
-                    needsFetch = true;
-                    break;
-                }
-            }
-
-            if (needsFetch) {
-                showGlobalLoader();
-                await Promise.all(phases.map(async (ph) => {
-                    if (!recordsBySession[sessionId][ph]) {
-                        const res = await fetch(`/api/devices/${selectedDeviceId}/history/${sessionId}/${ph}`);
-                        if (!res.ok) throw new Error(`HTTP ${res.status} gagal memuat data sensor ${ph}`);
-                        const historyMap = await res.json();
-                        const arr = [];
-                        Object.entries(historyMap).forEach(([key, val]) => {
-                            if (key !== '_meta') arr.push(val);
-                        });
-                        recordsBySession[sessionId][ph] = arr;
-                    }
-                }));
-                hideGlobalLoader();
-                buildSessionUI();
-            }
+            showGlobalLoader();
+            await _ensureSessionHistoryLoaded(sessionId);
+            hideGlobalLoader();
+            buildSessionUI();
         }
 
         const phaseData = recordsBySession[sessionId] || {};

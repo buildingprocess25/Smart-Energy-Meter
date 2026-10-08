@@ -44,7 +44,9 @@ def _on_message(client, userdata, msg):
         payload = msg.payload.decode('utf-8')
         parts = topic.split('/')
         if len(parts) >= 2 and parts[0] == 'energymeter':
-            device_id = parts[1]
+            device_id = parts[1].strip().rstrip(':').strip()
+            if not device_id:
+                return
             _mqtt_last_seen[device_id] = time.time()
             if device_id not in _mqtt_live_data:
                 _mqtt_live_data[device_id] = {}
@@ -202,6 +204,7 @@ def init_db():
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_device_phase ON telemetry(device_id, phase);")
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_history_session ON history(session_id);")
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_history_device_session ON history(device_id, session_id);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_history_dev_sess_ph ON history(device_id, session_id, phase, epoch);")
 
                     # Unique constraint untuk cegah duplikat snapshot telemetry
                     # (terjadi saat Flask debug mode menjalankan 2 proses sekaligus)
@@ -1050,6 +1053,56 @@ def get_sessions(device_id: str):
         print(f"Error getting sessions: {e}")
         return jsonify([]), 500
 
+
+@app.route('/api/devices/<device_id>/history/<session_id>')
+def get_session_history_all(device_id: str, session_id: str):
+    """Batch fetch all phases for a session in a single optimized DB query."""
+    try:
+        with get_db_cursor() as cur:
+            cur.execute("""
+                SELECT phase, timestamp, epoch, voltage, current, power, frequency, energy, power_factor, offline
+                FROM history
+                WHERE device_id = %s AND session_id = %s
+                ORDER BY epoch ASC
+            """, (device_id, session_id))
+            rows = cur.fetchall()
+
+        import math
+        history_by_phase = {}
+        for row in rows:
+            ph, ts, epoch_val, v, c, w, hz, kwh, pf, offline = row
+            if ph not in history_by_phase:
+                history_by_phase[ph] = {}
+
+            key = f'capture_{epoch_val}'
+            apparent = (v * c) / 1000.0
+            power_kw = w / 1000.0
+            reactive = math.sqrt(max(0.0, (apparent ** 2) - (power_kw ** 2)))
+            try:
+                phase_angle = math.acos(max(-1.0, min(1.0, pf))) * 180.0 / math.pi
+            except:
+                phase_angle = 0.0
+
+            history_by_phase[ph][key] = {
+                'timestamp': ts,
+                'epoch': epoch_val,
+                'offline': offline,
+                'Voltage': v,
+                'Current': c,
+                'Power': w,
+                'Frequency': hz,
+                'Energy': kwh,
+                'PowerFactor': pf,
+                'Apparent': round(apparent, 4),
+                'Reactive': round(reactive, 4),
+                'Phase1': round(phase_angle, 2),
+                'EnergyApparent': 0.0,
+                'EnergyReactive': 0.0
+            }
+        return jsonify(history_by_phase)
+    except Exception as e:
+        print(f"Error in get_session_history_all: {e}")
+        return jsonify({}), 500
 
 @app.route('/api/devices/<device_id>/history/<session_id>/<phase>')
 def get_session_history_phase(device_id: str, session_id: str, phase: str):
